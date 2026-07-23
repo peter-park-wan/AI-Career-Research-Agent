@@ -35,6 +35,125 @@ class MCPConfig(BaseModel):
     )
     """Whether the MCP server requires authentication"""
 
+
+class CareerConfig(BaseModel):
+    """Configuration for career research features."""
+    
+    default_target_role: Optional[str] = Field(
+        default="AI工程师",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "AI工程师",
+                "description": "Default target job role for career research (e.g., AI工程师, 机器学习工程师)"
+            }
+        }
+    )
+    """Default target job role for career research"""
+    
+    default_target_city: Optional[str] = Field(
+        default="北京",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "北京",
+                "description": "Default target city for job search (e.g., 北京, 上海, 深圳)"
+            }
+        }
+    )
+    """Default target city for job search"""
+    
+    default_education: Optional[str] = Field(
+        default="本科",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "本科",
+                "description": "Default education level for career analysis"
+            }
+        }
+    )
+    """Default education level for career analysis"""
+    
+    default_experience_years: Optional[str] = Field(
+        default="3年",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "3年",
+                "description": "Default years of work experience for career analysis"
+            }
+        }
+    )
+    """Default years of work experience"""
+    
+    default_skills: Optional[str] = Field(
+        default="Python, PyTorch, TensorFlow, 机器学习",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "Python, PyTorch, TensorFlow, 机器学习",
+                "description": "Default skill list for career analysis (comma-separated)"
+            }
+        }
+    )
+    """Default skill list for career analysis"""
+    
+    enable_github_search: Optional[bool] = Field(
+        default=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": True,
+                "description": "Whether to enable GitHub project search for career recommendations"
+            }
+        }
+    )
+    """Whether to enable GitHub project search"""
+    
+    max_github_results: Optional[int] = Field(
+        default=10,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 10,
+                "min": 1,
+                "max": 30,
+                "description": "Maximum number of GitHub projects to return"
+            }
+        }
+    )
+    """Maximum number of GitHub projects to return"""
+    
+    skill_match_threshold: Optional[float] = Field(
+        default=0.6,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "slider",
+                "default": 0.6,
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.1,
+                "description": "Threshold for skill match score to recommend a role"
+            }
+        }
+    )
+    """Threshold for skill match score"""
+    
+    learning_phase_duration_weeks: Optional[int] = Field(
+        default=4,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 4,
+                "min": 2,
+                "max": 12,
+                "description": "Default duration (weeks) for each learning phase in the roadmap"
+            }
+        }
+    )
+    """Default duration for each learning phase"""
+
 class Configuration(BaseModel):
     """Main configuration class for the Deep Research agent."""
     
@@ -151,11 +270,13 @@ class Configuration(BaseModel):
         }
     )
     research_model: str = Field(
-        default="openai:gpt-4.1",
+        #default="openai:gpt-4.1",
+        default="deepseek:deepseek-chat",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+                #"default": "openai:gpt-4.1",
+                "default": "deepseek:deepseek-chat",
                 "description": "Model for conducting research. NOTE: Make sure your Researcher Model supports the selected search API."
             }
         }
@@ -171,11 +292,13 @@ class Configuration(BaseModel):
         }
     )
     compression_model: str = Field(
-        default="openai:gpt-4.1",
+        #default="openai:gpt-4.1",
+        default="deepseek:deepseek-chat",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+               # "default": "openai:gpt-4.1",
+                "default": "deepseek:deepseek-chat",
                 "description": "Model for compressing research findings from sub-agents. NOTE: Make sure your Compression Model supports the selected search API."
             }
         }
@@ -191,11 +314,13 @@ class Configuration(BaseModel):
         }
     )
     final_report_model: str = Field(
-        default="openai:gpt-4.1",
+        #default="openai:gpt-4.1",
+        default="deepseek:deepseek-chat",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "openai:gpt-4.1",
+                #"default": "openai:gpt-4.1",
+                "default": "deepseek:deepseek-chat",
                 "description": "Model for writing the final report from all research findings"
             }
         }
@@ -228,6 +353,18 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "text",
                 "description": "Any additional instructions to pass along to the Agent regarding the MCP tools that are available to it."
+            }
+        }
+    )
+    
+    # Career Research Configuration
+    career_config: Optional[CareerConfig] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "object",
+                "description": "Configuration for career research features"
             }
         }
     )

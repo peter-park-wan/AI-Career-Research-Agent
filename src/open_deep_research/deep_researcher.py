@@ -19,7 +19,7 @@ from langgraph.types import Command
 from open_deep_research.configuration import (
     Configuration,
 )
-from open_deep_research.prompts import (
+from open_deep_research.career_prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
     compress_research_system_prompt,

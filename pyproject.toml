@@ -1,13 +1,37 @@
 [project]
-name = "open_deep_research"
-version = "0.0.16"
-description = "Planning, research, and report generation."
+name = "ai-career-research-agent"
+version = "1.0.0"
+description = "AI Career Research Agent - 智能求职研究助手，基于LangGraph多Agent工作流实现岗位市场分析、技能差距评估、学习路线规划、简历优化和面试准备。"
 authors = [
-    { name = "Lance Martin" }
+    { name = "AI Career Research Team" }
 ]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+keywords = [
+    "AI",
+    "Career",
+    "Job Search",
+    "Research",
+    "LangGraph",
+    "Agent",
+    "LLM",
+    "Deep Learning",
+    "Machine Learning"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Job Seekers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Career",
+    "Topic :: Job Search",
+    "Topic :: Artificial Intelligence",
+    "Topic :: Research"
+]
 dependencies = [
     "langgraph>=0.5.4",
     "langchain-community>=0.3.9",

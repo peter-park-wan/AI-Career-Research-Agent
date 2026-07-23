@@ -4,11 +4,11 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from langgraph.constants import Send
 from langgraph.graph import START, END, StateGraph
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt, Command, Send
 
-from legacy.state import (
+
+from .state import (
     ReportStateInput,
     ReportStateOutput,
     Sections,
@@ -19,7 +19,7 @@ from legacy.state import (
     Feedback
 )
 
-from legacy.prompts import (
+from .prompts import (
     report_planner_query_writer_instructions,
     report_planner_instructions,
     query_writer_instructions, 
@@ -29,8 +29,8 @@ from legacy.prompts import (
     section_writer_inputs
 )
 
-from legacy.configuration import Configuration
-from legacy.utils import (
+from .configuration import Configuration
+from .utils import (
     format_sections, 
     get_config_value, 
     get_search_params, 
@@ -444,7 +444,7 @@ def compile_final_report(state: ReportState, config: RunnableConfig):
     all_sections = "\n\n".join([s.content for s in sections])
 
     if configurable.include_source_str:
-        return {"final_report": all_sections, "source_str": state["source_str"]}
+        return {"final_report": all_sections, "source_str": state.get("source_str", "")}
     else:
         return {"final_report": all_sections}
 

@@ -16,7 +16,7 @@ Open Deep Research is an experimental, fully open-source research assistant that
 Clone the repository:
 ```bash
 git clone https://github.com/langchain-ai/open_deep_research.git
-cd open_deep_research
+cd AI Career Research Agent
 ```
 
 Then edit the `.env` file to customize the environment variables (for model selection, search tools, and other configuration settings):

@@ -923,3 +923,218 @@ def get_tavily_api_key(config: RunnableConfig):
         return api_keys.get("TAVILY_API_KEY")
     else:
         return os.getenv("TAVILY_API_KEY")
+
+
+def get_github_api_key(config: RunnableConfig):
+    """Get GitHub API key from environment or config."""
+    should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
+    if should_get_from_config.lower() == "true":
+        api_keys = config.get("configurable", {}).get("apiKeys", {})
+        if not api_keys:
+            return None
+        return api_keys.get("GITHUB_API_KEY")
+    else:
+        return os.getenv("GITHUB_API_KEY")
+
+
+##########################
+# Career Research Utils
+##########################
+
+@tool(description="Search GitHub for relevant open source projects by keywords and topics")
+async def search_github_projects(
+    keywords: List[str],
+    sort: Annotated[Literal["stars", "forks", "updated"], InjectedToolArg] = "stars",
+    order: Annotated[Literal["desc", "asc"], InjectedToolArg] = "desc",
+    max_results: Annotated[int, InjectedToolArg] = 10,
+    config: RunnableConfig = None
+) -> str:
+    """Search GitHub for relevant open source projects to enhance career research.
+    
+    Args:
+        keywords: List of search keywords for finding related projects
+        sort: Sort criteria (stars, forks, or updated)
+        order: Sort order (descending or ascending)
+        max_results: Maximum number of results to return
+        config: Runtime configuration for API key access
+        
+    Returns:
+        Formatted string containing GitHub project results
+    """
+    github_api_key = get_github_api_key(config)
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    
+    if github_api_key:
+        headers["Authorization"] = f"token {github_api_key}"
+    
+    search_queries = []
+    for keyword in keywords:
+        # Build search query with multiple filters
+        queries = [
+            f"{keyword}",
+            f"{keyword} ai",
+            f"{keyword} machine learning",
+            f"{keyword} deep learning",
+        ]
+        search_queries.extend(queries)
+    
+    all_results = []
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for query in search_queries[:3]:  # Limit queries to avoid rate limits
+            try:
+                url = f"https://api.github.com/search/repositories?q={query}&sort={sort}&order={order}&per_page={min(max_results, 5)}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        all_results.extend(data.get("items", [])[:max_results])
+                    elif response.status == 403:
+                        logging.warning("GitHub API rate limit exceeded, returning cached results")
+                        break
+            except Exception as e:
+                logging.warning(f"GitHub search failed for query '{query}': {str(e)}")
+    
+    # Deduplicate results by repo URL
+    unique_results = {}
+    for item in all_results:
+        url = item["html_url"]
+        if url not in unique_results:
+            unique_results[url] = item
+    
+    # Format results
+    if not unique_results:
+        return "No GitHub projects found. Please try different keywords."
+    
+    formatted_output = "GitHub Projects:\n\n"
+    for i, (url, item) in enumerate(list(unique_results.values())[:max_results], 1):
+        formatted_output += f"\n--- PROJECT {i} ---\n"
+        formatted_output += f"Name: {item['full_name']}\n"
+        formatted_output += f"URL: {url}\n"
+        formatted_output += f"Description: {item.get('description', 'No description')}\n"
+        formatted_output += f"Stars: {item.get('stargazers_count', 0)}\n"
+        formatted_output += f"Forks: {item.get('forks_count', 0)}\n"
+        formatted_output += f"Language: {item.get('language', 'Unknown')}\n"
+        formatted_output += f"Last Updated: {item.get('updated_at', 'Unknown')}\n"
+        formatted_output += "-" * 60 + "\n"
+    
+    return formatted_output
+
+
+def extract_user_profile_from_messages(messages: list[MessageLikeRepresentation]) -> dict:
+    """Extract user profile information from conversation messages for career research.
+    
+    Args:
+        messages: List of conversation messages to analyze
+        
+    Returns:
+        Dictionary containing extracted user profile information
+    """
+    profile = {
+        "target_role": "",
+        "target_city": "",
+        "education": "",
+        "experience_years": "",
+        "current_skills": "",
+        "expected_salary": "",
+        "career_goals": "",
+        "available_time": ""
+    }
+    
+    # Combine all user messages
+    user_messages = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            user_messages.append(msg.content)
+        elif hasattr(msg, 'content'):
+            user_messages.append(str(msg.content))
+    
+    text = "\n".join(user_messages)
+    
+    # Simple keyword-based extraction (can be enhanced with LLM)
+    import re
+    
+    # Extract target role using common job titles
+    job_titles = ["AI工程师", "机器学习", "深度学习", "数据科学家", "算法工程师", 
+                  "后端开发", "前端开发", "全栈", "软件工程师", "Python", 
+                  "AI Engineer", "ML Engineer", "Machine Learning", "Deep Learning",
+                  "Data Scientist", "Software Engineer"]
+    for title in job_titles:
+        if title.lower() in text.lower():
+            if not profile["target_role"]:
+                profile["target_role"] = title
+            elif len(title) > len(profile["target_role"]):
+                profile["target_role"] = title
+    
+    # Extract city
+    cities = ["北京", "上海", "深圳", "杭州", "广州", "成都", "南京", "武汉", 
+              "北京", "上海", "深圳", "杭州", "广州", "Chengdu", "Nanjing", "Wuhan",
+              "Beijing", "Shanghai", "Shenzhen", "Hangzhou", "Guangzhou"]
+    for city in cities:
+        if city in text:
+            if not profile["target_city"]:
+                profile["target_city"] = city
+    
+    # Extract experience
+    exp_patterns = [
+        r"(\d+)\s*年经验",
+        r"(\d+)\s*年工作经验",
+        r"(\d+)\s*年相关经验",
+        r"(\d+)\s*years?\s*experience",
+        r"(\d+)\s*年经验",
+    ]
+    for pattern in exp_patterns:
+        match = re.search(pattern, text)
+        if match:
+            profile["experience_years"] = match.group(1) + "年"
+            break
+    
+    # Extract education
+    edu_patterns = [
+        r"(本科|硕士|博士|研究生|学士|硕士|博士)",
+        r"(Bachelor|Masters|PhD|Master's)",
+        r"(大学|学院|学校)\s*(本科|硕士|博士)",
+    ]
+    for pattern in exp_patterns:
+        match = re.search(pattern, text)
+        if match:
+            profile["education"] = match.group(1)
+            break
+    
+    # Extract skills (common tech skills)
+    common_skills = ["Python", "PyTorch", "TensorFlow", "深度学习", "机器学习", 
+                     "NLP", "计算机视觉", "CV", "自然语言处理", 
+                     "SQL", "Java", "C++", "JavaScript", "React", "Vue",
+                     "Git", "Docker", "Linux", "AWS", "Azure", "阿里云",
+                     "pytorch", "tensorflow", "nlp", "cv", "sql"]
+    skills_found = []
+    for skill in common_skills:
+        if skill.lower() in text.lower():
+            skills_found.append(skill)
+    if skills_found:
+        profile["current_skills"] = ", ".join(skills_found)
+    
+    return profile
+
+
+def calculate_skill_match_score(user_skills: str, required_skills: str) -> float:
+    """Calculate skill match score between user skills and required skills.
+    
+    Args:
+        user_skills: Comma-separated list of user skills
+        required_skills: Comma-separated list of required skills
+        
+    Returns:
+        Match score as float between 0 and 1
+    """
+    if not user_skills or not required_skills:
+        return 0.0
+    
+    user_skill_set = set(s.strip().lower() for s in user_skills.split(",") if s.strip())
+    required_skill_set = set(s.strip().lower() for s in required_skills.split(",") if s.strip())
+    
+    if not required_skill_set:
+        return 0.0
+    
+    matched = user_skill_set.intersection(required_skill_set)
+    score = len(matched) / len(required_skill_set)
+    
+    return round(score, 2)

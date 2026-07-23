@@ -1,5 +1,5 @@
 """
-Pytest configuration for open_deep_research tests.
+Pytest configuration for AI_Career_Research_Agent tests.
 """
 
 import pytest
