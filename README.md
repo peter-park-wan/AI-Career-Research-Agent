@@ -142,8 +142,9 @@ AI_Career_Research_Agent/
 
 ### 环境要求
 
-- Python 3.10+
-- pip 或 poetry
+- Python 3.11（推荐，与 `langgraph.json` 声明一致）
+- [uv](https://github.com/astral-sh/uv)（推荐，提供 `uvx` 工具运行器）
+- 或 pip / poetry
 
 ### 安装依赖
 
@@ -184,13 +185,30 @@ LANGSMITH_TRACING=true
 
 ### 运行方式
 
-```bash
-# 方式1：使用 langgraph-cli
-langgraph up
+推荐使用 `uvx` 以**免 Docker**的本地开发模式（`langgraph-cli[inmem]`）启动，它会自动构建隔离环境并加载当前项目：
 
-# 方式2：Python 脚本运行
-python -c "from open_deep_research.deep_researcher import deep_researcher; await deep_researcher.ainvoke({'messages': [('human', '我想找AI工程师岗位，在上海')]})"
+```bash
+# 推荐：使用 uvx 启动本地开发服务器（内存态，无需 Docker）
+uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 langgraph dev --allow-blocking
 ```
+
+> 说明：
+> - `--from "langgraph-cli[inmem]"` 启用内存态服务器，**不需要 Docker**；
+> - `--with-editable .` 将当前项目以可编辑方式安装，使 `open_deep_research` 包可被导入；
+> - `--python 3.11` 锁定解释器版本（与 `langgraph.json` 一致）；
+> - `--allow-blocking` 允许 Agent 调用同步/阻塞型工具（如 Tavily、requests）；
+> - `--refresh` 忽略缓存、强制刷新依赖。
+>
+> 启动后访问 http://localhost:8123 即可在 LangGraph Studio 中可视化调试。
+
+如果你是先在本地用 pip 安装好依赖的，也可以直接运行（同样需 `langgraph-cli[inmem]`）：
+
+```bash
+# 已 pip install -e . 后，直接启动（仍需 [inmem] 以避免 Docker）
+langgraph dev --allow-blocking
+```
+
+> ⚠️ 注意：旧文档中的 `langgraph up` 会启动完整 Platform 并**依赖 Docker**，本地无 Docker 环境会失败；顶层 `await` 的 `python -c` 写法在 `python -c` 下属语法错误，请勿使用。
 
 ---
 
