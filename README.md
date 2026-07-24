@@ -307,6 +307,89 @@ print(result.cover_letter)    # 单阶段产物也可独立取用
 
 > 给定具体 JD 时（`jd_text=...`），工作流会跳过岗位发现/调研，直接基于该 JD 做匹配度分析与后续阶段。
 
+## 🌐 HTTP API（FastAPI）
+
+除 LangGraph Studio 外，项目额外提供一套 FastAPI 接口，便于把求职 Agent 嵌入你自己的产品 / 前端 / 自动化脚本。所有接口均支持可选的 Bearer Token 鉴权（设置环境变量 `API_BEARER_TOKEN` 后生效）。
+
+### 启动
+
+```bash
+# 安装含 API 依赖
+pip install -e .
+
+# 本地启动（默认 8000 端口，自动加载 .env）
+uvicorn open_deep_research.api:app --host 0.0.0.0 --port 8000
+# 或
+python -m open_deep_research.api
+```
+
+启动后访问：
+- 接口文档（Swagger UI）：http://localhost:8000/docs
+- 健康检查：http://localhost:8000/health
+
+### 接口一览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/` | 服务信息与可用端点 |
+| GET | `/health` | 健康检查 |
+| POST | `/api/research` | 运行深度研究图，返回完整消息与最终答案 |
+| POST | `/api/research/stream` | **SSE 流式**返回研究过程（LLM token / 工具调用） |
+| GET | `/api/profile` | 读取候选人背景画像（简历或 `CareerConfig.user_profile`） |
+| POST | `/api/career/gap-analysis` | 针对具体 JD 的匹配度分析 |
+| POST | `/api/career/discover-jobs` | 岗位发现：推荐岗位方向与公司类型 |
+| POST | `/api/career/interview` | 面试准备清单 |
+| POST | `/api/career/resume` | 简历优化建议 + 改写 bullet |
+| POST | `/api/career/cover-letter` | 中文求职信 |
+| POST | `/api/career/workflow` | 端到端工作流，返回整合报告 + 各阶段产物 |
+
+> 请求体支持 `configurable`（覆盖 `Configuration` 配置项）、`thread_id`（多轮记忆）、`recursion_limit`。所有 `/api/*` 接口在设置了 `API_BEARER_TOKEN` 后需携带 `Authorization: Bearer <token>`。
+
+### 调用示例
+
+```bash
+# 端到端求职工作流
+curl -s -X POST http://localhost:8000/api/career/workflow \
+  -H "Content-Type: application/json" \
+  -d '{"target_role":"AI工程师","target_city":"深圳"}' | jq '.report'
+
+# 具体 JD 的匹配度分析
+curl -s -X POST http://localhost:8000/api/career/gap-analysis \
+  -H "Content-Type: application/json" \
+  -d '{"jd_text":"招聘 AI 工程师，要求 3 年 Python、PyTorch 经验"}' | jq '.gap_analysis'
+
+# 流式研究（SSE）
+curl -N -X POST http://localhost:8000/api/research/stream \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"分析上海 AI 工程师的就业前景"}]}'
+```
+
+## 🐳 Docker 部署
+
+项目已提供 `Dockerfile` 与 `docker-compose.yml`，可一键容器化部署 FastAPI 服务。
+
+```bash
+# 1. 配置环境变量
+cp .env.example .env   # 填入 API Key 等
+
+# 2. 构建并启动（后台）
+docker compose up -d --build
+
+# 3. 验证
+curl http://localhost:8000/health
+```
+
+常用环境变量（写入 `.env` 或 `docker-compose.yml` 的 `environment`）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `API_PORT` | `8000` | 宿主机映射端口 |
+| `API_BEARER_TOKEN` | 空 | 设置后开启 Bearer 鉴权 |
+| `API_CORS_ORIGINS` | `*` | 逗号分隔的允许跨域来源 |
+| `API_HOST` | `0.0.0.0` | 监听地址 |
+
+> 容器已挂载 `./data` 目录，更新简历（`data/简历.md`）或知识库后无需重建镜像即可生效。如需 RAG，请先按上文「RAG 私有知识库」构建索引（索引目录默认在 `.dockerignore` 中被忽略，构建镜像时不会打包，请在运行容器内或挂载卷中准备）。
+
 ## 📝 使用示例
 
 ### 输入示例
@@ -414,8 +497,8 @@ client.evaluate(
 - [x] 求职功能单元测试 + LangSmith 评估器
 - [x] 项目文档完善
 - [ ] Web 前端界面优化
-- [ ] Docker 部署配置
-- [ ] API 接口封装
+- [x] Docker 部署配置
+- [x] API 接口封装（FastAPI：研究图 + 求职各阶段 + SSE 流式）
 - [ ] 用户记忆功能（Memory）
 
 ---

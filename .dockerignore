@@ -1,0 +1,27 @@
+# 版本控制与本地环境
+.git
+.gitignore
+.venv
+venv
+env
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地 docs / IDE
+.vscode
+.idea
+*.md.bak
+
+# 数据与索引（构建时已 COPY data；此处忽略大型索引以减小上下文，按需调整）
+data/rag_index/
+
+# 其他
+Dockerfile
+docker-compose.yml
+.dockerignore
