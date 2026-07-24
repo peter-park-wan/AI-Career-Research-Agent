@@ -245,6 +245,17 @@ uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 lang
 
 > 说明：RAG 索引建立在本地 Chroma，每次 `data/` 内容变化后需重新运行 `ingest` 脚本刷新。
 
+### 5. （可选）使用 Supabase 远端向量库
+默认 `RAG_VECTOR_STORE=chroma` 使用本地文件。若想让知识库上云、可多人共享，可切换为 Supabase（Postgres + pgvector）：
+1. 在 Supabase 项目中启用 **pgvector** 扩展（`CREATE EXTENSION IF NOT EXISTS vector;`）；
+2. 在 `.env` 设置 `SUPABASE_CONNECTION_STRING=postgresql://user:pass@host:5432/postgres`（项目的 Postgres 连接串）；
+3. 设 `RAG_VECTOR_STORE=supabase`；
+4. 构建索引时加 `--vector-store supabase`：
+```bash
+python -m open_deep_research.ingest --src ./data --vector-store supabase
+```
+> 这样就把"本地文件知识库"升级为"可远端访问的数据库向量库"，呼应本项目的可插拔存储设计。
+
 ## 🧑‍💼 求职背景资料（简历画像）
 
 为了让调研真正"懂你"，Agent 会自动加载你的背景资料并注入到所有研究员的提示中（supervisor 与子研究员都会看到）：
