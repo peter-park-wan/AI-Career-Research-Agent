@@ -31,7 +31,7 @@ from langchain_core.messages import (
     AIMessageChunk,
     HumanMessage,
     SystemMessage,
-    messages_from_dict,
+    ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
@@ -127,8 +127,13 @@ _MAX_MESSAGES = int(os.getenv("API_MAX_MESSAGES", "50"))
 _RESEARCH_TIMEOUT = int(os.getenv("API_RESEARCH_TIMEOUT", "0"))
 
 
-def parse_messages(messages: List[MessageItem]) -> List[Dict[str, Any]]:
-    """将接口消息转换为 LangChain 可识别的 message dict 列表。"""
+def parse_messages(messages: List[MessageItem]) -> List[Any]:
+    """将接口消息转换为 LangChain BaseMessage 列表。
+
+    支持 role: user/human、assistant/ai、system、tool（content 可为字符串或
+    结构化内容）。直接构造消息对象，避免 ``messages_from_dict`` 对 ``data``
+    字段的依赖。
+    """
     if len(messages) > _MAX_MESSAGES:
         raise HTTPException(
             status_code=413,
@@ -142,11 +147,21 @@ def parse_messages(messages: List[MessageItem]) -> List[Dict[str, Any]]:
         "system": "system",
         "tool": "tool",
     }
-    out: List[Dict[str, Any]] = []
-    for m in messages:
+    out: List[Any] = []
+    for idx, m in enumerate(messages):
         role = role_map.get(m.role, "human")
-        out.append({"type": role, "content": m.content})
-    return messages_from_dict(out)
+        content = m.content
+        if role == "human":
+            out.append(HumanMessage(content=content))
+        elif role == "ai":
+            out.append(AIMessage(content=content))
+        elif role == "system":
+            out.append(SystemMessage(content=content))
+        elif role == "tool":
+            out.append(ToolMessage(content=content, tool_call_id=f"api-{idx}"))
+        else:
+            out.append(HumanMessage(content=content))
+    return out
 
 
 def _final_content(result: Dict[str, Any]) -> str:
@@ -192,21 +207,55 @@ async def health():
 # --------------------------------------------------------------------------- #
 # 1. 深度研究图
 # --------------------------------------------------------------------------- #
+# API 使用「带 checkpointer 的独立编译图」，从而让 thread_id 真正具备跨请求记忆。
+# 注意：langgraph.json 平台部署复用的是无 checkpointer 的 deep_researcher 对象，
+# 这里额外编译一份不会破坏平台部署；生产环境可将 API_CHECKPOINTER 切换到
+# Postgres/Redis 等共享 checkpointer 以支持多副本与重启持久化。
+_RESEARCH_GRAPH = None
+
+
+def _get_research_graph():
+    global _RESEARCH_GRAPH
+    if _RESEARCH_GRAPH is not None:
+        return _RESEARCH_GRAPH
+
+    mode = os.getenv("API_CHECKPOINTER", "memory").lower()
+    if mode in ("none", "off", "false"):
+        from open_deep_research.deep_researcher import deep_researcher
+
+        _RESEARCH_GRAPH = deep_researcher
+    else:
+        # 默认：进程内内存 checkpointer，使 thread_id 多轮记忆可用（单容器/单副本）
+        try:
+            from langgraph.checkpoint.memory import MemorySaver
+        except Exception:  # noqa: BLE001
+            from open_deep_research.deep_researcher import deep_researcher
+
+            _RESEARCH_GRAPH = deep_researcher
+        else:
+            from open_deep_research.deep_researcher import deep_researcher_builder
+
+            _RESEARCH_GRAPH = deep_researcher_builder.compile(
+                checkpointer=MemorySaver()
+            )
+    return _RESEARCH_GRAPH
+
+
 @app.post("/api/research", dependencies=[Depends(require_token)], tags=["research"])
 async def research(body: ResearchRequest):
     """运行 LangGraph 深度研究图，返回最终消息列表与答案。"""
-    from open_deep_research.deep_researcher import deep_researcher
+    graph = _get_research_graph()
 
     cfg = build_runnable_config(body.configurable, body.thread_id, body.recursion_limit)
     parsed = parse_messages(body.messages)
     try:
         if _RESEARCH_TIMEOUT > 0:
             result = await asyncio.wait_for(
-                deep_researcher.ainvoke({"messages": parsed}, config=cfg),
+                graph.ainvoke({"messages": parsed}, config=cfg),
                 timeout=_RESEARCH_TIMEOUT,
             )
         else:
-            result = await deep_researcher.ainvoke({"messages": parsed}, config=cfg)
+            result = await graph.ainvoke({"messages": parsed}, config=cfg)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="研究执行超时")
     except Exception as e:  # noqa: BLE001
@@ -230,7 +279,7 @@ async def research(body: ResearchRequest):
 )
 async def research_stream(body: ResearchRequest):
     """以 SSE 流式返回研究图执行过程（LLM token 与工具调用）。"""
-    from open_deep_research.deep_researcher import deep_researcher
+    graph = _get_research_graph()
 
     cfg = build_runnable_config(body.configurable, body.thread_id, body.recursion_limit)
     parsed = parse_messages(body.messages)
@@ -244,7 +293,7 @@ async def research_stream(body: ResearchRequest):
                 stream_cm = _nullcontext()
 
             async with stream_cm:
-                async for chunk, meta in deep_researcher.astream(
+                async for chunk, meta in graph.astream(
                     {"messages": parsed}, config=cfg, stream_mode="messages"
                 ):
                     node = (meta or {}).get("langgraph_node")

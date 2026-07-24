@@ -389,6 +389,9 @@ curl http://localhost:8000/health
 | `API_HOST` | `0.0.0.0` | 监听地址 |
 | `API_MAX_MESSAGES` | `50` | 单次研究请求的最大消息条数（超出返回 413） |
 | `API_RESEARCH_TIMEOUT` | `0` | 研究接口整体超时（秒），`0` 表示不限制 |
+| `API_CHECKPOINTER` | `memory` | 研究图状态后端：`memory`（进程内，支持 `thread_id` 多轮记忆）/ `none`（无记忆，与原图一致） |
+
+> **多轮记忆**：研究接口默认挂载进程内 checkpointer，传入同一个 `thread_id` 即可跨请求续聊——客户端**只需发送本轮新增消息**，历史由服务端按 `thread_id` 维护。注意：进程内 checkpointer 在容器重启或横向扩容（多副本）后会丢失，生产环境需将 `API_CHECKPOINTER` 切换到 Postgres/Redis 等共享后端。平台部署（`langgraph.json`）复用的是无 checkpointer 的图对象，互不影响。
 
 > 流式研究接口（`/api/research/stream`）在 SSE 流结束时额外推送一个 `{"type":"result","content":...}` 事件，包含完整最终答案，客户端无需自行拼接。
 
