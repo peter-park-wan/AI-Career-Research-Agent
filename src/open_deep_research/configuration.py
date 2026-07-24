@@ -124,6 +124,28 @@ class CareerConfig(BaseModel):
         }
     )
     """Maximum number of GitHub projects to return"""
+    resume_path: str = Field(
+        default="./data/简历.md",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "string",
+                "default": "./data/简历.md",
+                "description": "Resume / background file path; injected into research prompts so the agent knows your profile."
+            }
+        }
+    )
+    """Resume / background file path (injected into prompts)"""
+    user_profile: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "textarea",
+                "description": "Paste your background summary here to override resume_path. The agent tailors research to it."
+            }
+        }
+    )
+    """Inline user profile text (overrides resume_path)"""
     
     skill_match_threshold: Optional[float] = Field(
         default=0.6,
@@ -353,6 +375,72 @@ class Configuration(BaseModel):
             "x_oap_ui_config": {
                 "type": "text",
                 "description": "Any additional instructions to pass along to the Agent regarding the MCP tools that are available to it."
+            }
+        }
+    )
+
+    # RAG (Retrieval-Augmented Generation) Configuration
+    rag_enabled: bool = Field(
+        default=False,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": False,
+                "description": "启用 RAG 私有知识库检索（需先运行索引脚本 ingest）。"
+            }
+        }
+    )
+    rag_embedding_model: str = Field(
+        default="openai:text-embedding-3-small",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "string",
+                "default": "openai:text-embedding-3-small",
+                "description": "Embedding 模型。openai:<model> 使用 OpenAI，其他值视为本地 sentence-transformers 模型名。"
+            }
+        }
+    )
+    rag_vector_store: str = Field(
+        default="chroma",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "select",
+                "default": "chroma",
+                "options": [
+                    {"label": "Chroma (本地)", "value": "chroma"},
+                    {"label": "Supabase pgvector", "value": "supabase"}
+                ],
+                "description": "向量库类型（当前仅实现 chroma）。"
+            }
+        }
+    )
+    rag_index_path: str = Field(
+        default="./data/rag_index",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "string",
+                "default": "./data/rag_index",
+                "description": "Chroma 索引持久化目录。"
+            }
+        }
+    )
+    rag_collection: str = Field(
+        default="career_kb",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "string",
+                "default": "career_kb",
+                "description": "向量库集合名称。"
+            }
+        }
+    )
+    rag_top_k: int = Field(
+        default=4,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "integer",
+                "default": 4,
+                "description": "每次检索返回的最大片段数。"
             }
         }
     )

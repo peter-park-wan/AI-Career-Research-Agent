@@ -133,6 +133,11 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 - A separate agent will write the final report - you just need to gather information
 - When calling ConductResearch, provide complete standalone instructions - sub-agents can't see other agents' work
 - Do NOT use acronyms or abbreviations in your research questions, be very clear and specific
+
+<User Background>
+The following is the user's own background (resume / self-introduction). Use it to tailor the research plan so findings are relevant to the user's skills, experience, goals and gaps:
+{user_profile}
+</User Background>
 </Scaling Rules>"""
 
 research_system_prompt = """You are a research assistant conducting research on the user's input topic. For context, today's date is {date}.
@@ -143,10 +148,10 @@ You can use any of the tools provided to you to find resources that can help ans
 </Task>
 
 <Available Tools>
-You have access to two main tools:
+You have access to these main tools:
 1. **tavily_search**: For conducting web searches to gather information
 2. **think_tool**: For reflection and strategic planning during research
-{mcp_prompt}
+{mcp_prompt}{rag_prompt}
 
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps. Do not call think_tool with the tavily_search or any other tools. It should be to reflect on the results of the search.**
 </Available Tools>
@@ -179,6 +184,11 @@ After each search tool call, use think_tool to analyze the results:
 - What's missing?
 - Do I have enough to answer the question comprehensively?
 - Should I search more or provide my answer?
+
+<User Background>
+The following is the user's own background (resume / self-introduction). When the research touches the user's personal situation — skills, experience, target roles, strengths or gaps — ground your findings in this context so the report is personalized:
+{user_profile}
+</User Background>
 </Show Your Thinking>
 """
 

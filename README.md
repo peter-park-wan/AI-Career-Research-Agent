@@ -212,6 +212,49 @@ langgraph dev --allow-blocking
 
 ---
 
+## 📚 RAG 私有知识库（可选）
+
+将**私有资料**（个人简历、目标公司 JD、面经、学习资源库等）构建为本地向量索引，研究员在调研时可优先检索这些资料，作为联网搜索的补充，从而给出更贴合你个人背景的回答。
+
+### 1. 准备资料
+把文档（`.md` / `.txt` / `.json` / `.html` / `.pdf`）放入 `data/` 目录。仓库已附带一个示例 `data/简历.md`。
+
+### 2. 构建索引
+```bash
+# 默认使用 OpenAI embedding（需 OPENAI_API_KEY）
+python -m open_deep_research.ingest --src ./data --index-path ./data/rag_index
+
+# 也可使用本地离线 embedding（需先: pip install sentence-transformers）
+python -m open_deep_research.ingest --src ./data --embedding BAAI/bge-small-zh-v1.5
+```
+
+### 3. 开启 RAG
+在 `.env` 中设置：
+```bash
+RAG_ENABLED=true
+RAG_EMBEDDING_MODEL=openai:text-embedding-3-small
+RAG_INDEX_PATH=./data/rag_index
+RAG_TOP_K=4
+```
+或在 LangGraph Studio 的配置面板里打开 `rag_enabled`。开启后，`retrieve_knowledge_base` 工具会自动注入到研究员工具集中。
+
+### 4. 重新启动
+```bash
+uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 langgraph dev --allow-blocking
+```
+
+> 说明：RAG 索引建立在本地 Chroma，每次 `data/` 内容变化后需重新运行 `ingest` 脚本刷新。
+
+## 🧑‍💼 求职背景资料（简历画像）
+
+为了让调研真正"懂你"，Agent 会自动加载你的背景资料并注入到所有研究员的提示中（supervisor 与子研究员都会看到）：
+
+- **默认来源**：`./data/简历.md`（仓库已附带示例）。把你的真实简历覆盖该文件即可。
+- **覆盖方式**：在 LangGraph Studio 的 `CareerConfig` 配置面板里直接粘贴 `user_profile` 文本，优先级高于简历文件。
+- 注入后，研究员在规划研究方向、撰写报告时会结合你的技能栈、经验与目标岗位，给出更贴合个人情况的建议。
+
+> 结合上一项 RAG 能力：简历进知识库（RAG 检索）→ 简历进提示（画像注入），两套机制互补，分别解决"检索私有资料"与"理解你是谁"。
+
 ## 📝 使用示例
 
 ### 输入示例

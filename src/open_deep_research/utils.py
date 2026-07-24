@@ -594,6 +594,15 @@ async def get_all_tools(config: RunnableConfig):
     mcp_tools = await load_mcp_tools(config, existing_tool_names)
     tools.extend(mcp_tools)
     
+    # Add RAG knowledge-base retrieval tool if enabled
+    if configurable.rag_enabled:
+        from open_deep_research.rag import retrieve_knowledge_base
+        tools.append(retrieve_knowledge_base)
+    
+    # Add GitHub project search tool for career research
+    if configurable.career_config and configurable.career_config.enable_github_search:
+        tools.append(search_github_projects)
+    
     return tools
 
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):

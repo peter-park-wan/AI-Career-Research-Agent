@@ -19,6 +19,7 @@ from langgraph.types import Command
 from open_deep_research.configuration import (
     Configuration,
 )
+from open_deep_research.profile import load_user_profile
 from open_deep_research.career_prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -154,10 +155,14 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
     
     # Step 3: Initialize supervisor with research brief and instructions
+    # Load the user's background profile (resume / inline) to personalize research
+    user_profile = load_user_profile(config)
+
     supervisor_system_prompt = lead_researcher_prompt.format(
         date=get_today_str(),
         max_concurrent_research_units=configurable.max_concurrent_research_units,
-        max_researcher_iterations=configurable.max_researcher_iterations
+        max_researcher_iterations=configurable.max_researcher_iterations,
+        user_profile=user_profile
     )
     
     return Command(
@@ -397,8 +402,18 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     }
     
     # Prepare system prompt with MCP context if available
+    rag_prompt = ""
+    if configurable.rag_enabled:
+        rag_prompt = (
+            "\n3. **retrieve_knowledge_base**: 用于从用户私有知识库（如个人简历、目标公司岗位JD、面经、"
+            "学习资源库等）检索相关内容。**当问题涉及用户个人背景或内部资料时，应优先调用此工具**，"
+            "再结合联网搜索补充。"
+        )
+    user_profile = load_user_profile(config)
     researcher_prompt = research_system_prompt.format(
         mcp_prompt=configurable.mcp_prompt or "", 
+        rag_prompt=rag_prompt,
+        user_profile=user_profile,
         date=get_today_str()
     )
     
