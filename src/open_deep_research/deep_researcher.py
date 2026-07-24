@@ -410,9 +410,17 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
             "再结合联网搜索补充。"
         )
     user_profile = load_user_profile(config)
+    gap_prompt = ""
+    if configurable.career_config and configurable.career_config.enable_gap_analysis:
+        gap_prompt = (
+            "\n4. **analyze_job_fit**: 用于分析你与目标岗位的匹配度（Gap Analysis / 人岗匹配）。"
+            "当用户提供了具体岗位的 JD（职位描述）并想了解自己的匹配程度、技能差距或提升路径时，"
+            "调用此工具，它会结合你的简历/背景资料给出评分与建议。"
+        )
     researcher_prompt = research_system_prompt.format(
         mcp_prompt=configurable.mcp_prompt or "", 
         rag_prompt=rag_prompt,
+        gap_prompt=gap_prompt,
         user_profile=user_profile,
         date=get_today_str()
     )

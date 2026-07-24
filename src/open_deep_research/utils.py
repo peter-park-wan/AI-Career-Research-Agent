@@ -603,6 +603,11 @@ async def get_all_tools(config: RunnableConfig):
     if configurable.career_config and configurable.career_config.enable_github_search:
         tools.append(search_github_projects)
     
+    # Add job-fit / gap analysis tool for career research
+    if configurable.career_config and configurable.career_config.enable_gap_analysis:
+        from open_deep_research.gap_analysis import analyze_job_fit
+        tools.append(analyze_job_fit)
+    
     return tools
 
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):

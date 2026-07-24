@@ -146,6 +146,17 @@ class CareerConfig(BaseModel):
         }
     )
     """Inline user profile text (overrides resume_path)"""
+    enable_gap_analysis: Optional[bool] = Field(
+        default=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": True,
+                "description": "是否启用岗位匹配度分析工具（analyze_job_fit / Gap Analysis）。"
+            }
+        }
+    )
+    """Whether to enable job-fit / gap analysis tool"""
     
     skill_match_threshold: Optional[float] = Field(
         default=0.6,
