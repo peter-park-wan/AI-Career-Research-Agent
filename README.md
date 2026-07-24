@@ -387,6 +387,10 @@ curl http://localhost:8000/health
 | `API_BEARER_TOKEN` | 空 | 设置后开启 Bearer 鉴权 |
 | `API_CORS_ORIGINS` | `*` | 逗号分隔的允许跨域来源 |
 | `API_HOST` | `0.0.0.0` | 监听地址 |
+| `API_MAX_MESSAGES` | `50` | 单次研究请求的最大消息条数（超出返回 413） |
+| `API_RESEARCH_TIMEOUT` | `0` | 研究接口整体超时（秒），`0` 表示不限制 |
+
+> 流式研究接口（`/api/research/stream`）在 SSE 流结束时额外推送一个 `{"type":"result","content":...}` 事件，包含完整最终答案，客户端无需自行拼接。
 
 > 容器已挂载 `./data` 目录，更新简历（`data/简历.md`）或知识库后无需重建镜像即可生效。如需 RAG，请先按上文「RAG 私有知识库」构建索引（索引目录默认在 `.dockerignore` 中被忽略，构建镜像时不会打包，请在运行容器内或挂载卷中准备）。
 

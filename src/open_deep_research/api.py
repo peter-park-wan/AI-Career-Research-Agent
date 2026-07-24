@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import nullcontext as _nullcontext
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -27,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     HumanMessage,
     SystemMessage,
     messages_from_dict,
@@ -119,8 +121,19 @@ def build_runnable_config(
     return {"configurable": cfg}
 
 
+# 单次研究允许的最大消息条数，防止请求体滥用
+_MAX_MESSAGES = int(os.getenv("API_MAX_MESSAGES", "50"))
+# 研究接口整体超时（秒），0 表示不限制
+_RESEARCH_TIMEOUT = int(os.getenv("API_RESEARCH_TIMEOUT", "0"))
+
+
 def parse_messages(messages: List[MessageItem]) -> List[Dict[str, Any]]:
     """将接口消息转换为 LangChain 可识别的 message dict 列表。"""
+    if len(messages) > _MAX_MESSAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"消息数量超出上限（最大 {_MAX_MESSAGES} 条）",
+        )
     role_map = {
         "user": "human",
         "human": "human",
@@ -185,10 +198,17 @@ async def research(body: ResearchRequest):
     from open_deep_research.deep_researcher import deep_researcher
 
     cfg = build_runnable_config(body.configurable, body.thread_id, body.recursion_limit)
+    parsed = parse_messages(body.messages)
     try:
-        result = await deep_researcher.ainvoke(
-            {"messages": parse_messages(body.messages)}, config=cfg
-        )
+        if _RESEARCH_TIMEOUT > 0:
+            result = await asyncio.wait_for(
+                deep_researcher.ainvoke({"messages": parsed}, config=cfg),
+                timeout=_RESEARCH_TIMEOUT,
+            )
+        else:
+            result = await deep_researcher.ainvoke({"messages": parsed}, config=cfg)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="研究执行超时")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"研究执行失败：{e}")
 
@@ -216,18 +236,37 @@ async def research_stream(body: ResearchRequest):
     parsed = parse_messages(body.messages)
 
     async def event_generator() -> AsyncIterator[str]:
+        final_parts: List[str] = []
         try:
-            async for chunk, meta in deep_researcher.astream(
-                {"messages": parsed}, config=cfg, stream_mode="messages"
-            ):
-                data = {
-                    "type": type(chunk).__name__,
-                    "content": chunk.content,
-                    "name": getattr(chunk, "name", None),
-                    "tool_call_chunks": getattr(chunk, "tool_call_chunks", None),
-                    "langgraph_node": (meta or {}).get("langgraph_node"),
-                }
-                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            if _RESEARCH_TIMEOUT > 0:
+                stream_cm = asyncio.timeout(_RESEARCH_TIMEOUT)
+            else:
+                stream_cm = _nullcontext()
+
+            async with stream_cm:
+                async for chunk, meta in deep_researcher.astream(
+                    {"messages": parsed}, config=cfg, stream_mode="messages"
+                ):
+                    node = (meta or {}).get("langgraph_node")
+                    data = {
+                        "type": type(chunk).__name__,
+                        "content": chunk.content,
+                        "name": getattr(chunk, "name", None),
+                        "tool_call_chunks": getattr(chunk, "tool_call_chunks", None),
+                        "langgraph_node": node,
+                    }
+                    # 同时累积最终报告节点的输出，用于结尾的 result 事件
+                    if node == "final_report_generation" and isinstance(
+                        chunk, AIMessageChunk
+                    ):
+                        if isinstance(chunk.content, str):
+                            final_parts.append(chunk.content)
+                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            # 发送完整最终答案（无需额外 LLM 调用）
+            yield f"data: {json.dumps({'type': 'result', 'content': ''.join(final_parts)}, ensure_ascii=False)}\n\n"
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'content': '研究执行超时'}, ensure_ascii=False)}\n\n"
         except Exception as e:  # noqa: BLE001
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
