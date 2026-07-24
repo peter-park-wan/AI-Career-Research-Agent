@@ -608,6 +608,23 @@ async def get_all_tools(config: RunnableConfig):
         from open_deep_research.gap_analysis import analyze_job_fit
         tools.append(analyze_job_fit)
     
+    # Add end-to-end career workflow tools (discovery / interview / resume / cover letter)
+    if configurable.career_config and configurable.career_config.enable_career_workflow:
+        from open_deep_research.career_workflow import (
+            discover_jobs,
+            optimize_resume,
+            prepare_interview,
+            run_career_workflow_tool,
+            write_cover_letter,
+        )
+        tools.extend([
+            discover_jobs,
+            prepare_interview,
+            optimize_resume,
+            write_cover_letter,
+            run_career_workflow_tool,
+        ])
+    
     return tools
 
 def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):

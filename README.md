@@ -279,6 +279,34 @@ python -m open_deep_research.ingest --src ./data --vector-store supabase
 
 > "这是我想投的 AI 工程师 JD：<粘贴 JD 文本>，分析一下我和它的匹配度与差距。"
 
+## 🔄 端到端求职工作流编排
+
+除了单点能力，项目还提供一条**端到端求职流水线**，把分散的能力串成完整的「求职作战方案」：
+
+```text
+岗位发现 → 岗位/公司调研 → 匹配度分析 → 面试准备 → 简历优化 → 求职信
+```
+
+- `discover_jobs`：基于你的画像与目标城市，推荐优先投递的岗位方向与公司类型；
+- `prepare_interview`：结合目标岗位与匹配度分析，生成面试备战清单（高频题/项目深挖/复习路线）；
+- `optimize_resume`：针对目标岗位优化简历，给出策略 + 改写后的核心经历 bullet；
+- `write_cover_letter`：为目标岗位写一封真诚、具体的中文求职信；
+- `run_career_workflow`：一键跑通上述全部阶段，返回一份整合了各阶段产物的 Markdown 报告。
+
+这些能力以工具形式注入研究员工具集（由 `CareerConfig.enable_career_workflow` 控制，默认开启），因此多智能体研究图可以**自主驱动整条求职流程**；也可以作为库函数直接调用：
+
+```python
+from open_deep_research.career_workflow import run_career_workflow
+
+result = await run_career_workflow(
+    target_role="AI工程师", target_city="深圳", config=config
+)
+print(result.report)          # 完整 Markdown 报告
+print(result.cover_letter)    # 单阶段产物也可独立取用
+```
+
+> 给定具体 JD 时（`jd_text=...`），工作流会跳过岗位发现/调研，直接基于该 JD 做匹配度分析与后续阶段。
+
 ## 📝 使用示例
 
 ### 输入示例
@@ -382,6 +410,8 @@ client.evaluate(
 - [x] 面试准备方案模块
 - [x] GitHub 项目推荐模块
 - [x] 求职专用配置项
+- [x] 端到端求职工作流编排（岗位发现→调研→匹配度→面试准备→简历优化→求职信）
+- [x] 求职功能单元测试 + LangSmith 评估器
 - [x] 项目文档完善
 - [ ] Web 前端界面优化
 - [ ] Docker 部署配置

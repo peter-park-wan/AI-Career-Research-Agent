@@ -158,6 +158,19 @@ class CareerConfig(BaseModel):
     )
     """Whether to enable job-fit / gap analysis tool"""
     
+    enable_career_workflow: Optional[bool] = Field(
+        default=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": True,
+                "description": "是否启用端到端求职工作流工具（岗位发现/面试准备/简历优化/求职信）。"
+            }
+        }
+    )
+    """Whether to enable the end-to-end career workflow tools"""
+    
+
     skill_match_threshold: Optional[float] = Field(
         default=0.6,
         metadata={
