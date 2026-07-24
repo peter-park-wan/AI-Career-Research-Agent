@@ -327,12 +327,46 @@ python -m open_deep_research.ingest --src ./data --vector-store supabase
 ## 🧪 测试
 
 ```bash
-# 运行测试
+# 运行全部测试
 pytest tests/
 
 # 运行特定测试
 pytest tests/test_deep_researcher.py
+
+# 运行求职功能专属测试（无需 API Key，LLM 调用已 mock）
+pytest tests/test_career_features.py -q
 ```
+
+### 求职功能测试覆盖
+
+`tests/test_career_features.py` 对本次新增的求职能力做了单元测试与集成测试，**默认不依赖任何 API Key**：
+
+| 测试对象 | 覆盖内容 |
+| --- | --- |
+| `profile.load_user_profile` | 内联画像优先于简历文件、缺失文件回退为空 |
+| `utils.calculate_skill_match_score` | 满分 / 空输入 / 部分匹配（matched ÷ required） |
+| `utils.extract_user_profile_from_messages` | 从用户消息抽取目标岗位、城市、技能 |
+| `CareerConfig` / `Configuration` | 默认值、从 `configurable` 构建 |
+| `utils.get_all_tools` | 按开关注入 `search_github_projects` / `analyze_job_fit` / `retrieve_knowledge_base` |
+| `gap_analysis.run_gap_analysis` | 无画像时返回提示；有画像时用 mock LLM 验证四段式输出 |
+| `rag.RAGStore` | Chroma 未构建 / Supabase 未配置连接串时的兜底提示 |
+| Chroma 端到端检索 | 真实建索引 + 检索（需 `langchain_chroma`，缺失时自动跳过） |
+
+### LangSmith 评估（可选）
+
+`tests/evaluators_career.py` 提供了一组 LLM-as-judge / 启发式评估器，可接入 LangSmith 的 `client.evaluate(...)`，对「岗位匹配度分析」「求职调研」等输出做长期质量追踪：
+
+```python
+from langsmith import Client
+from tests.evaluators_career import career_evaluators
+
+client.evaluate(
+    dataset_name="career-gap-analysis",   # 在 LangSmith 中创建的评估数据集
+    evaluators=career_evaluators,
+)
+```
+
+评估指标包括：匹配度分析结构完整度、是否给出量化匹配分、画像覆盖度、是否真正调用了私有知识库（RAG）。设置 `LANGSMITH_API_KEY` 与 `LANGSMITH_TRACING=true` 即可启用追踪。
 
 ---
 
