@@ -314,8 +314,8 @@ print(result.cover_letter)    # 单阶段产物也可独立取用
 ### 启动
 
 ```bash
-# 安装含 API 依赖
-pip install -e .
+# 安装含 API 依赖（fastapi/uvicorn 等已拆到 api extras）
+pip install -e ".[api]"
 
 # 本地启动（默认 8000 端口，自动加载 .env）
 uvicorn open_deep_research.api:app --host 0.0.0.0 --port 8000
@@ -389,9 +389,19 @@ curl http://localhost:8000/health
 | `API_HOST` | `0.0.0.0` | 监听地址 |
 | `API_MAX_MESSAGES` | `50` | 单次研究请求的最大消息条数（超出返回 413） |
 | `API_RESEARCH_TIMEOUT` | `0` | 研究接口整体超时（秒），`0` 表示不限制 |
-| `API_CHECKPOINTER` | `memory` | 研究图状态后端：`memory`（进程内，支持 `thread_id` 多轮记忆）/ `none`（无记忆，与原图一致） |
+| `API_CHECKPOINTER` | `memory` | 研究图状态后端：`memory`（进程内，支持 `thread_id` 多轮记忆）/ `none`（无记忆，与原图一致）/ `postgres` / `redis`（共享后端，支持多副本与持久化） |
+| `API_CHECKPOINTER_POSTGRES_DSN` | 空 | `API_CHECKPOINTER=postgres` 时的连接串，如 `postgresql://user:pass@host:5432/db` |
+| `API_CHECKPOINTER_REDIS_URI` | 空 | `API_CHECKPOINTER=redis` 时的连接串，如 `redis://localhost:6379`（`redis` 模式需先安装 `langgraph-checkpoint-redis`） |
+| `API_GAP_CACHE` | `on` | 是否缓存 `run_gap_analysis` 结果以省去重复 LLM 开销（`off` 关闭） |
+| `API_GAP_CACHE_MAX` | `256` | Gap 缓存最大条目数，超出后整体清空 |
+| `API_RATE_LIMIT_PER_MINUTE` | `0` | 单客户端 IP 每分钟最大请求数，`0` 表示不限流 |
+| `API_RELOAD` | `false` | 本地开发热重载（`python -m open_deep_research.api` 生效；容器 `CMD` 用 uvicorn 不带 `--reload`，需手动加） |
 
-> **多轮记忆**：研究接口默认挂载进程内 checkpointer，传入同一个 `thread_id` 即可跨请求续聊——客户端**只需发送本轮新增消息**，历史由服务端按 `thread_id` 维护。注意：进程内 checkpointer 在容器重启或横向扩容（多副本）后会丢失，生产环境需将 `API_CHECKPOINTER` 切换到 Postgres/Redis 等共享后端。平台部署（`langgraph.json`）复用的是无 checkpointer 的图对象，互不影响。
+> **多轮记忆**：研究接口默认挂载进程内 checkpointer，传入同一个 `thread_id` 即可跨请求续聊——客户端**只需发送本轮新增消息**，历史由服务端按 `thread_id` 维护。注意：进程内 checkpointer 在容器重启或横向扩容（多副本）后会丢失，生产环境请将 `API_CHECKPOINTER` 设为 `postgres` 或 `redis` 以共享会话状态（需提供对应连接串）。启用共享后端需额外安装依赖：`pip install ".[api,postgres]"` 或 `pip install ".[api,redis]"`；容器化部署时，请将 `Dockerfile` 中的 `pip install -e ".[api]"` 改为 `pip install -e ".[api,postgres]"`（或 `.[api,redis]`）后重新构建镜像（`docker-compose.yml` 本身无 `build.args`，需改 `Dockerfile` 或改用多阶段构建）。
+
+> **限流**：默认关闭（`API_RATE_LIMIT_PER_MINUTE=0`）。开启后基于客户端 IP（优先取 `X-Forwarded-For`）做 60 秒滑动窗口限流，命中返回 `429` 并带 `Retry-After`。生产多副本场景建议改用 Redis 等共享限流。
+
+> **Gap 缓存**：`/api/career/gap-analysis`、`/api/career/interview`、`/api/career/resume` 等接口复用同一份匹配度分析结果；相同 `jd_text` + `config.configurable` 只调用一次 LLM，后续命中缓存。若简历文件等内容在进程内被外部修改，请设置 `API_GAP_CACHE=off` 或重启服务。
 
 > 流式研究接口（`/api/research/stream`）在 SSE 流结束时额外推送一个 `{"type":"result","content":...}` 事件，包含完整最终答案，客户端无需自行拼接。
 

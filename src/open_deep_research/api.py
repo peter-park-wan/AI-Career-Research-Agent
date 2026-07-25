@@ -17,15 +17,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import logging
 import os
+import time
 import uuid
+from collections import OrderedDict
 from contextlib import nullcontext as _nullcontext
+
+logger = logging.getLogger(__name__)
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -52,6 +59,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --------------------------------------------------------------------------- #
+# 简易限流（#3：基于客户端 IP 的滑动窗口；生产可换为 Redis 共享限流）
+# --------------------------------------------------------------------------- #
+_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT_PER_MINUTE", "0"))  # 0 表示不限流
+_RATE_WINDOW = 60.0
+_RATE_BUCKETS: "dict[str, list[float]]" = {}
+_RATE_LOCK = asyncio.Lock()
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if _RATE_LIMIT <= 0:
+        return await call_next(request)
+    # 健康检查与文档等不计入限流
+    if request.url.path in ("/", "/health", "/docs", "/openapi.json", "/redoc"):
+        return await call_next(request)
+
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client_ip = (
+        forwarded.split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+    now = time.monotonic()
+    async with _RATE_LOCK:
+        hits = _RATE_BUCKETS.setdefault(client_ip, [])
+        cutoff = now - _RATE_WINDOW
+        hits[:] = [t for t in hits if t > cutoff]
+        if len(hits) >= _RATE_LIMIT:
+            retry = int(max(hits[0] + _RATE_WINDOW - now, 1))
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "请求过于频繁，请稍后再试",
+                    "retry_after_seconds": retry,
+                },
+                headers={"Retry-After": str(retry)},
+            )
+        hits.append(now)
+    return await call_next(request)
 
 # 若设置了 API_BEARER_TOKEN，则所有 /api/* 接口需携带 Authorization: Bearer <token>
 _API_TOKEN = os.getenv("API_BEARER_TOKEN")
@@ -126,6 +173,52 @@ _MAX_MESSAGES = int(os.getenv("API_MAX_MESSAGES", "50"))
 # 研究接口整体超时（秒），0 表示不限制
 _RESEARCH_TIMEOUT = int(os.getenv("API_RESEARCH_TIMEOUT", "0"))
 
+# --------------------------------------------------------------------------- #
+# Gap Analysis 进程内缓存（#5：避免 interview/resume/gap-analysis 等重复跑 LLM）
+# --------------------------------------------------------------------------- #
+_GAP_CACHE_ENABLED = os.getenv("API_GAP_CACHE", "on").lower() not in (
+    "off",
+    "0",
+    "false",
+)
+_GAP_CACHE_MAX = int(os.getenv("API_GAP_CACHE_MAX", "256"))
+_GAP_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_GAP_CACHE_LOCK = asyncio.Lock()
+
+
+def _gap_cache_key(jd_text: str, config: "RunnableConfig") -> str:
+    configurable = (config or {}).get("configurable", {}) or {}
+    payload = {"jd_text": jd_text, "configurable": configurable}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def run_gap_analysis_cached(jd_text: str, config: "RunnableConfig") -> str:
+    """调用 ``run_gap_analysis``，对相同输入做进程内缓存以省去重复 LLM 开销。
+
+    注意：缓存基于 ``jd_text`` 与 ``config.configurable``（含 profile / 模型等）。
+    若简历文件等内容在进程内被外部修改，请设置 ``API_GAP_CACHE=off`` 或重启服务。
+    """
+    if not _GAP_CACHE_ENABLED:
+        from open_deep_research.gap_analysis import run_gap_analysis
+
+        return await run_gap_analysis(jd_text, config)
+
+    key = _gap_cache_key(jd_text, config)
+    async with _GAP_CACHE_LOCK:
+        if key in _GAP_CACHE:
+            return _GAP_CACHE[key]
+
+    from open_deep_research.gap_analysis import run_gap_analysis
+
+    result = await run_gap_analysis(jd_text, config)
+    async with _GAP_CACHE_LOCK:
+        _GAP_CACHE[key] = result
+        _GAP_CACHE.move_to_end(key)
+        while len(_GAP_CACHE) > _GAP_CACHE_MAX:
+            _GAP_CACHE.popitem(last=False)
+    return result
+
 
 def parse_messages(messages: List[MessageItem]) -> List[Any]:
     """将接口消息转换为 LangChain BaseMessage 列表。
@@ -164,6 +257,19 @@ def parse_messages(messages: List[MessageItem]) -> List[Any]:
     return out
 
 
+def _content_to_text(content: Any) -> str:
+    """将消息 content（可能是多模态 list）规整为纯文本。"""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text", "")))
+            else:
+                parts.append(str(block))
+        return "".join(parts)
+    return str(content)
+
+
 def _final_content(result: Dict[str, Any]) -> str:
     msgs = result.get("messages", [])
     if not msgs:
@@ -172,9 +278,9 @@ def _final_content(result: Dict[str, Any]) -> str:
     if isinstance(last, (HumanMessage, SystemMessage)):
         for m in reversed(msgs):
             if isinstance(m, AIMessage):
-                return m.content
+                return _content_to_text(m.content)
         return ""
-    return last.content
+    return _content_to_text(last.content)
 
 
 # --------------------------------------------------------------------------- #
@@ -209,9 +315,68 @@ async def health():
 # --------------------------------------------------------------------------- #
 # API 使用「带 checkpointer 的独立编译图」，从而让 thread_id 真正具备跨请求记忆。
 # 注意：langgraph.json 平台部署复用的是无 checkpointer 的 deep_researcher 对象，
-# 这里额外编译一份不会破坏平台部署；生产环境可将 API_CHECKPOINTER 切换到
-# Postgres/Redis 等共享 checkpointer 以支持多副本与重启持久化。
+# 这里额外编译一份不会破坏平台部署。
+#
+# 通过 API_CHECKPOINTER 选择 checkpointer：
+#   - memory  （默认）进程内内存，单容器/单副本多轮记忆；重启即丢失
+#   - none    复用平台无 checkpointer 版本（不保留多轮记忆）
+#   - postgres 需设置 API_CHECKPOINTER_POSTGRES_DSN，支持多副本共享与持久化
+#   - redis    需安装 langgraph-checkpoint-redis 并设置 API_CHECKPOINTER_REDIS_URI
+# 生产环境推荐 postgres/redis，以便横向扩展（多 worker/多副本）并持久化会话。
 _RESEARCH_GRAPH = None
+
+
+def _build_checkpointer(mode: str):
+    """根据模式构造 checkpointer，任意失败都安全回退到内存版。"""
+    if mode in ("none", "off", "false"):
+        return None
+    if mode in ("", "memory"):
+        from langgraph.checkpoint.memory import MemorySaver
+
+        return MemorySaver()
+    if mode == "postgres":
+        dsn = os.getenv("API_CHECKPOINTER_POSTGRES_DSN") or os.getenv("POSTGRES_DSN")
+        if not dsn:
+            logger.warning(
+                "API_CHECKPOINTER=postgres 但未设置连接串，回退到 memory"
+            )
+            from langgraph.checkpoint.memory import MemorySaver
+
+            return MemorySaver()
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+
+            return PostgresSaver.from_conn_string(dsn)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Postgres checkpointer 初始化失败，回退 memory: %s", e)
+            from langgraph.checkpoint.memory import MemorySaver
+
+            return MemorySaver()
+    if mode == "redis":
+        uri = os.getenv("API_CHECKPOINTER_REDIS_URI") or os.getenv("REDIS_URI")
+        if not uri:
+            logger.warning(
+                "API_CHECKPOINTER=redis 但未设置连接串，回退到 memory"
+            )
+            from langgraph.checkpoint.memory import MemorySaver
+
+            return MemorySaver()
+        try:
+            from langgraph.checkpoint.redis import RedisSaver
+
+            return RedisSaver.from_conn_string(uri)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Redis checkpointer 初始化失败（缺少 langgraph-checkpoint-redis？），回退 memory: %s",
+                e,
+            )
+            from langgraph.checkpoint.memory import MemorySaver
+
+            return MemorySaver()
+    logger.warning("未知 API_CHECKPOINTER=%s，回退到 memory", mode)
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return MemorySaver()
 
 
 def _get_research_graph():
@@ -220,24 +385,36 @@ def _get_research_graph():
         return _RESEARCH_GRAPH
 
     mode = os.getenv("API_CHECKPOINTER", "memory").lower()
-    if mode in ("none", "off", "false"):
-        from open_deep_research.deep_researcher import deep_researcher
-
-        _RESEARCH_GRAPH = deep_researcher
-    else:
-        # 默认：进程内内存 checkpointer，使 thread_id 多轮记忆可用（单容器/单副本）
-        try:
-            from langgraph.checkpoint.memory import MemorySaver
-        except Exception:  # noqa: BLE001
+    cp = _build_checkpointer(mode)
+    try:
+        if cp is None:
             from open_deep_research.deep_researcher import deep_researcher
 
             _RESEARCH_GRAPH = deep_researcher
         else:
+            # 表结构初始化（best-effort；若为异步 setup 会给出提示）
+            setup = getattr(cp, "setup", None)
+            if callable(setup):
+                try:
+                    res = setup()
+                    if hasattr(res, "__await__"):
+                        logger.warning(
+                            "checkpointer.setup() 为协程，需在其事件循环中 await；"
+                            "如首次写入报错请手动执行 setup()"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "checkpointer.setup() 失败（表可能已存在，可忽略）：%s", e
+                    )
+
             from open_deep_research.deep_researcher import deep_researcher_builder
 
-            _RESEARCH_GRAPH = deep_researcher_builder.compile(
-                checkpointer=MemorySaver()
-            )
+            _RESEARCH_GRAPH = deep_researcher_builder.compile(checkpointer=cp)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("研究图编译失败，回退无 checkpointer 版本：%s", e)
+        from open_deep_research.deep_researcher import deep_researcher
+
+        _RESEARCH_GRAPH = deep_researcher
     return _RESEARCH_GRAPH
 
 
@@ -344,11 +521,9 @@ async def get_profile(configurable: Optional[str] = None):
 )
 async def api_gap_analysis(body: GapAnalysisRequest):
     """针对具体 JD 做人岗匹配度分析（Gap Analysis）。"""
-    from open_deep_research.gap_analysis import run_gap_analysis
-
     cfg = build_runnable_config(body.configurable, body.thread_id)
     try:
-        result = await run_gap_analysis(body.jd_text, cfg)
+        result = await run_gap_analysis_cached(body.jd_text, cfg)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"匹配度分析失败：{e}")
     return {"jd_text": body.jd_text, "gap_analysis": result}
@@ -385,18 +560,14 @@ async def api_discover_jobs(body: CareerStageRequest):
 )
 async def api_interview(body: CareerStageRequest):
     """面试准备：结合目标岗位与匹配度分析，生成备考清单。"""
-    from open_deep_research.career_workflow import (
-        run_gap_analysis,
-        run_interview_prep,
-    )
-    from open_deep_research.gap_analysis import run_gap_analysis as _gap
+    from open_deep_research.career_workflow import run_interview_prep
     from open_deep_research.profile import load_user_profile
 
     cfg = build_runnable_config(body.configurable, body.thread_id)
     profile = load_user_profile(cfg)
     jd = body.jd_text or f"目标岗位：{body.target_role}"
     try:
-        gap = await _gap(jd, cfg)
+        gap = await run_gap_analysis_cached(jd, cfg)
         result = await run_interview_prep(body.target_role, profile, gap, cfg)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"面试准备失败：{e}")
@@ -411,14 +582,13 @@ async def api_interview(body: CareerStageRequest):
 async def api_resume(body: CareerStageRequest):
     """简历优化：针对目标岗位给出策略 + 改写后的核心经历 bullet。"""
     from open_deep_research.career_workflow import run_resume_optimization
-    from open_deep_research.gap_analysis import run_gap_analysis as _gap
     from open_deep_research.profile import load_user_profile
 
     cfg = build_runnable_config(body.configurable, body.thread_id)
     profile = load_user_profile(cfg)
     jd = body.jd_text or f"目标岗位：{body.target_role}"
     try:
-        gap = await _gap(jd, cfg)
+        gap = await run_gap_analysis_cached(jd, cfg)
         result = await run_resume_optimization(body.target_role, profile, gap, cfg)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"简历优化失败：{e}")

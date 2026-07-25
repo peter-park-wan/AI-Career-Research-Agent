@@ -15,9 +15,9 @@ COPY README.md ./README.md
 COPY LICENSE ./LICENSE
 COPY data ./data
 
-# 安装项目（可编辑安装，使 open_deep_research 包可被导入）
+# 安装项目（含 api extras：FastAPI/uvicorn；可编辑安装使 open_deep_research 包可被导入）
 RUN pip install --upgrade pip \
-    && pip install -e .
+    && pip install -e ".[api]"
 
 EXPOSE 8000
 

@@ -6,6 +6,7 @@
 
 若环境中未安装 fastapi / httpx，该测试会自动跳过。
 """
+import asyncio
 import sys
 from pathlib import Path
 
@@ -91,3 +92,51 @@ def test_career_workflow(client):
     body = r.json()
     assert body["report"]
     assert "cover_letter" in body["artifacts"]
+
+
+def test_gap_analysis_cache_dedupes(monkeypatch):
+    """相同输入只跑一次 run_gap_analysis（#5 省去重复 LLM 开销）。"""
+    calls = {"n": 0}
+
+    async def counting_gap(jd_text, config):
+        calls["n"] += 1
+        return "GAP_RESULT"
+
+    monkeypatch.setattr(
+        "open_deep_research.gap_analysis.run_gap_analysis", counting_gap
+    )
+    api_module._GAP_CACHE.clear()
+    cfg = {"configurable": {"user_profile": "张三"}}
+    r1 = asyncio.run(api_module.run_gap_analysis_cached("JD-A", cfg))
+    r2 = asyncio.run(api_module.run_gap_analysis_cached("JD-A", cfg))
+    # 不同输入应再次触发
+    r3 = asyncio.run(api_module.run_gap_analysis_cached("JD-B", cfg))
+    assert (r1, r2, r3) == ("GAP_RESULT", "GAP_RESULT", "GAP_RESULT")
+    assert calls["n"] == 2
+    api_module._GAP_CACHE.clear()
+
+
+def test_rate_limit(monkeypatch):
+    """API_RATE_LIMIT_PER_MINUTE>0 时，超出窗口请求返回 429（#3）。"""
+    monkeypatch.setattr(api_module, "_RATE_LIMIT", 1)
+    api_module._RATE_BUCKETS.clear()
+    cli = TestClient(api_module.app)
+    assert cli.get("/api/profile").status_code == 200
+    assert cli.get("/api/profile").status_code == 429
+    api_module._RATE_BUCKETS.clear()
+    monkeypatch.setattr(api_module, "_RATE_LIMIT", 0)
+
+
+def test_checkpointer_fallback(monkeypatch):
+    """未配置连接串的 postgres/redis 安全回退到内存 checkpointer（#2）。"""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    monkeypatch.delenv("API_CHECKPOINTER_POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("API_CHECKPOINTER_REDIS_URI", raising=False)
+    monkeypatch.delenv("REDIS_URI", raising=False)
+
+    assert api_module._build_checkpointer("none") is None
+    assert isinstance(api_module._build_checkpointer("memory"), MemorySaver)
+    assert isinstance(api_module._build_checkpointer("postgres"), MemorySaver)
+    assert isinstance(api_module._build_checkpointer("redis"), MemorySaver)

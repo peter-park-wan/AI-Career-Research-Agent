@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, List, Optional
 
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SearchAPI(Enum):
@@ -21,17 +21,17 @@ class MCPConfig(BaseModel):
     
     url: Optional[str] = Field(
         default=None,
-        optional=True,
+
     )
     """The URL of the MCP server"""
     tools: Optional[List[str]] = Field(
         default=None,
-        optional=True,
+
     )
     """The tools to make available to the LLM"""
     auth_required: Optional[bool] = Field(
         default=False,
-        optional=True,
+
     )
     """Whether the MCP server requires authentication"""
 
@@ -41,7 +41,7 @@ class CareerConfig(BaseModel):
     
     default_target_role: Optional[str] = Field(
         default="AI工程师",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "AI工程师",
@@ -53,7 +53,7 @@ class CareerConfig(BaseModel):
     
     default_target_city: Optional[str] = Field(
         default="北京",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "北京",
@@ -65,7 +65,7 @@ class CareerConfig(BaseModel):
     
     default_education: Optional[str] = Field(
         default="本科",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "本科",
@@ -77,7 +77,7 @@ class CareerConfig(BaseModel):
     
     default_experience_years: Optional[str] = Field(
         default="3年",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "3年",
@@ -89,7 +89,7 @@ class CareerConfig(BaseModel):
     
     default_skills: Optional[str] = Field(
         default="Python, PyTorch, TensorFlow, 机器学习",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "Python, PyTorch, TensorFlow, 机器学习",
@@ -101,7 +101,7 @@ class CareerConfig(BaseModel):
     
     enable_github_search: Optional[bool] = Field(
         default=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
@@ -113,7 +113,7 @@ class CareerConfig(BaseModel):
     
     max_github_results: Optional[int] = Field(
         default=10,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 10,
@@ -126,7 +126,7 @@ class CareerConfig(BaseModel):
     """Maximum number of GitHub projects to return"""
     resume_path: str = Field(
         default="./data/简历.md",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "string",
                 "default": "./data/简历.md",
@@ -137,8 +137,8 @@ class CareerConfig(BaseModel):
     """Resume / background file path (injected into prompts)"""
     user_profile: Optional[str] = Field(
         default=None,
-        optional=True,
-        metadata={
+
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "textarea",
                 "description": "Paste your background summary here to override resume_path. The agent tailors research to it."
@@ -148,7 +148,7 @@ class CareerConfig(BaseModel):
     """Inline user profile text (overrides resume_path)"""
     enable_gap_analysis: Optional[bool] = Field(
         default=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
@@ -160,7 +160,7 @@ class CareerConfig(BaseModel):
     
     enable_career_workflow: Optional[bool] = Field(
         default=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
@@ -173,7 +173,7 @@ class CareerConfig(BaseModel):
 
     skill_match_threshold: Optional[float] = Field(
         default=0.6,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 0.6,
@@ -188,7 +188,7 @@ class CareerConfig(BaseModel):
     
     learning_phase_duration_weeks: Optional[int] = Field(
         default=4,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 4,
@@ -206,7 +206,7 @@ class Configuration(BaseModel):
     # General Configuration
     max_structured_output_retries: int = Field(
         default=3,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 3,
@@ -218,7 +218,7 @@ class Configuration(BaseModel):
     )
     allow_clarification: bool = Field(
         default=True,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": True,
@@ -228,7 +228,7 @@ class Configuration(BaseModel):
     )
     max_concurrent_research_units: int = Field(
         default=5,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 5,
@@ -242,7 +242,7 @@ class Configuration(BaseModel):
     # Research Configuration
     search_api: SearchAPI = Field(
         default=SearchAPI.TAVILY,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "select",
                 "default": "tavily",
@@ -258,7 +258,7 @@ class Configuration(BaseModel):
     )
     max_researcher_iterations: int = Field(
         default=6,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 6,
@@ -271,7 +271,7 @@ class Configuration(BaseModel):
     )
     max_react_tool_calls: int = Field(
         default=10,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "slider",
                 "default": 10,
@@ -285,7 +285,7 @@ class Configuration(BaseModel):
     # Model Configuration
     summarization_model: str = Field(
         default="openai:gpt-4.1-mini",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "default": "openai:gpt-4.1-mini",
@@ -295,7 +295,7 @@ class Configuration(BaseModel):
     )
     summarization_model_max_tokens: int = Field(
         default=8192,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 8192,
@@ -305,7 +305,7 @@ class Configuration(BaseModel):
     )
     max_content_length: int = Field(
         default=50000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 50000,
@@ -318,7 +318,7 @@ class Configuration(BaseModel):
     research_model: str = Field(
         #default="openai:gpt-4.1",
         default="deepseek:deepseek-chat",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 #"default": "openai:gpt-4.1",
@@ -329,7 +329,7 @@ class Configuration(BaseModel):
     )
     research_model_max_tokens: int = Field(
         default=10000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 10000,
@@ -340,7 +340,7 @@ class Configuration(BaseModel):
     compression_model: str = Field(
         #default="openai:gpt-4.1",
         default="deepseek:deepseek-chat",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                # "default": "openai:gpt-4.1",
@@ -351,7 +351,7 @@ class Configuration(BaseModel):
     )
     compression_model_max_tokens: int = Field(
         default=8192,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 8192,
@@ -362,7 +362,7 @@ class Configuration(BaseModel):
     final_report_model: str = Field(
         #default="openai:gpt-4.1",
         default="deepseek:deepseek-chat",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 #"default": "openai:gpt-4.1",
@@ -373,7 +373,7 @@ class Configuration(BaseModel):
     )
     final_report_model_max_tokens: int = Field(
         default=10000,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "number",
                 "default": 10000,
@@ -384,8 +384,8 @@ class Configuration(BaseModel):
     # MCP server configuration
     mcp_config: Optional[MCPConfig] = Field(
         default=None,
-        optional=True,
-        metadata={
+
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "mcp",
                 "description": "MCP server configuration"
@@ -394,8 +394,8 @@ class Configuration(BaseModel):
     )
     mcp_prompt: Optional[str] = Field(
         default=None,
-        optional=True,
-        metadata={
+
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "text",
                 "description": "Any additional instructions to pass along to the Agent regarding the MCP tools that are available to it."
@@ -406,7 +406,7 @@ class Configuration(BaseModel):
     # RAG (Retrieval-Augmented Generation) Configuration
     rag_enabled: bool = Field(
         default=False,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
                 "default": False,
@@ -416,7 +416,7 @@ class Configuration(BaseModel):
     )
     rag_embedding_model: str = Field(
         default="openai:text-embedding-3-small",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "string",
                 "default": "openai:text-embedding-3-small",
@@ -426,7 +426,7 @@ class Configuration(BaseModel):
     )
     rag_vector_store: str = Field(
         default="chroma",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "select",
                 "default": "chroma",
@@ -440,7 +440,7 @@ class Configuration(BaseModel):
     )
     rag_index_path: str = Field(
         default="./data/rag_index",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "string",
                 "default": "./data/rag_index",
@@ -450,7 +450,7 @@ class Configuration(BaseModel):
     )
     rag_collection: str = Field(
         default="career_kb",
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "string",
                 "default": "career_kb",
@@ -460,7 +460,7 @@ class Configuration(BaseModel):
     )
     rag_top_k: int = Field(
         default=4,
-        metadata={
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "integer",
                 "default": 4,
@@ -472,8 +472,8 @@ class Configuration(BaseModel):
     # Career Research Configuration
     career_config: Optional[CareerConfig] = Field(
         default=None,
-        optional=True,
-        metadata={
+
+        json_schema_extra={
             "x_oap_ui_config": {
                 "type": "object",
                 "description": "Configuration for career research features"
@@ -495,7 +495,4 @@ class Configuration(BaseModel):
         }
         return cls(**{k: v for k, v in values.items() if v is not None})
 
-    class Config:
-        """Pydantic configuration."""
-        
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
