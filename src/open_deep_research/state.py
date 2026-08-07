@@ -70,6 +70,7 @@ class AgentState(MessagesState):
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
     final_report: str
+    reflection_summary: Annotated[list[str], override_reducer] = []
 
 class SupervisorState(TypedDict):
     """State for the supervisor that manages research tasks."""

@@ -1,6 +1,12 @@
 """Main LangGraph implementation for the Deep Research agent."""
 
 import asyncio
+import inspect
+import logging
+from pydantic import BaseModel, Field as _Field
+
+from AI_Career_Research_Agent.src.open_deep_research.state import ConductResearch, ResearchComplete
+from langchain_core.tools.base import BaseTool
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
@@ -20,6 +26,15 @@ from open_deep_research.configuration import (
     Configuration,
 )
 from open_deep_research.profile import load_user_profile
+from open_deep_research.prompts import (
+    report_critique_prompt,
+    report_revision_prompt,
+)
+from open_deep_research.memory import (
+    recall_research_memory,
+    save_research_memory,
+    save_user_memory,
+)
 from open_deep_research.career_prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -155,15 +170,33 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
     
     # Step 3: Initialize supervisor with research brief and instructions
-    # Load the user's background profile (resume / inline) to personalize research
+    # Load the user's background profile (resume / inline / long-term memory) to personalize research
     user_profile = load_user_profile(config)
+
+    # Tier-2 memory: recall prior research findings relevant to this brief
+    past_research = recall_research_memory(
+        role="general",
+        query=response.research_brief or "",
+        k=3,
+        config=config,
+    )
 
     supervisor_system_prompt = lead_researcher_prompt.format(
         date=get_today_str(),
         max_concurrent_research_units=configurable.max_concurrent_research_units,
         max_researcher_iterations=configurable.max_researcher_iterations,
-        user_profile=user_profile
+        user_profile=user_profile,
+        past_research=past_research or "（暂无历史研究记忆）",
     )
+
+    # Tier-3 (RAG): when enabled, require the agent to retrieve private KB first
+    if getattr(configurable, "rag_enabled", False) and getattr(configurable, "rag_force", False):
+        supervisor_system_prompt += (
+            "\n\n<Retrieval Policy>\n"
+            "已启用私有知识库（简历/JD/面经等）。在开始任何网络检索之前，必须先调用 "
+            "`retrieve_knowledge_base` 检索私有资料；仅在私有库无法覆盖时再联网检索。"
+            "引用私有资料时须标注来源文件。\n</Retrieval Policy>"
+        )
     
     return Command(
         goto="research_supervisor", 
@@ -204,7 +237,7 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
     }
     
     # Available tools: research delegation, completion signaling, and strategic thinking
-    lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
+    lead_researcher_tools: list[type[ConductResearch] | type[ResearchComplete] | BaseTool] = [ConductResearch, ResearchComplete, think_tool]
     
     # Configure model with tools, retry logic, and model settings
     research_model = (
@@ -719,6 +752,190 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
         **cleared_state
     }
 
+
+# ---------------------------------------------------------------------------
+# Reflection node (Reflexion-style: Critique -> Revise loop)
+# Runs after the draft report is generated and before memory persistence.
+# A separate Critic model scores the draft against the brief + raw findings,
+# and the Writer revises accordingly. This closes the self-improvement loop
+# that ``think_tool`` alone (in-process chain-of-thought) cannot provide.
+# ---------------------------------------------------------------------------
+class ReportCritique(BaseModel):
+    """Structured self-critique of the draft report."""
+
+    needs_revision: bool = _Field(
+        default=False, description="报告是否需要重大修订"
+    )
+    coverage_gaps: str = _Field(default="", description="未覆盖的研究要点")
+    factual_issues: str = _Field(default="", description="事实不一致/无依据断言")
+    citation_issues: str = _Field(default="", description="引用问题")
+    revision_suggestions: str = _Field(default="", description="具体修订建议")
+
+
+async def reflect_and_revise_report(state: AgentState, config: RunnableConfig):
+    """Critique the draft report and revise it (Reflexion-style loop).
+
+    The loop runs at most ``max_reflection_rounds`` times. Each round:
+      1. A Critic model produces a structured ``ReportCritique``.
+      2. If no revision is needed, the current report is kept.
+      3. Otherwise a Writer model revises the report using the critique.
+    """
+    configurable = Configuration.from_runnable_config(config)
+    max_rounds = getattr(configurable, "max_reflection_rounds", 0)
+    if not max_rounds or max_rounds < 0:
+        # Reflection disabled: pass the draft through unchanged.
+        return {}
+
+    findings = "\n".join(state.get("notes", []))
+    research_brief = state.get("research_brief", "")
+    current_report = state.get("final_report", "")
+    if not current_report:
+        return {}
+
+    model_cfg = {
+        "model": configurable.final_report_model,
+        "max_tokens": configurable.final_report_model_max_tokens,
+        "api_key": get_api_key_for_model(configurable.final_report_model, config),
+        "tags": ["langsmith:nostream"],
+    }
+
+    # ``with_structured_output`` may return a coroutine on an unbound
+    # ConfigurableModel; await defensively (mirrors the memory node).
+    crit_structured = configurable_model.with_structured_output(ReportCritique)
+    if inspect.iscoroutine(crit_structured):
+        crit_structured = await crit_structured
+    critique_model = (
+        crit_structured
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config(model_cfg)
+    )
+    writer_model = configurable_model.with_config(model_cfg)
+
+    last_critique = ""
+    for _ in range(max_rounds):
+        try:
+            critique: ReportCritique = await critique_model.ainvoke([
+                HumanMessage(content=report_critique_prompt.format(
+                    research_brief=research_brief,
+                    draft_report=current_report,
+                    findings=findings[:8000],
+                ))
+            ])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("报告批评失败（跳过本轮反思）: %s", e)
+            break
+
+        last_critique = (
+            f"覆盖缺失: {critique.coverage_gaps}\n"
+            f"事实问题: {critique.factual_issues}\n"
+            f"引用问题: {critique.citation_issues}\n"
+            f"修订建议: {critique.revision_suggestions}"
+        )
+
+        if not critique.needs_revision:
+            # Critic is satisfied; stop iterating.
+            break
+
+        try:
+            revision = await writer_model.ainvoke([
+                HumanMessage(content=report_revision_prompt.format(
+                    research_brief=research_brief,
+                    draft_report=current_report,
+                    critique=last_critique,
+                    findings=findings[:8000],
+                ))
+            ])
+            if getattr(revision, "content", None):
+                current_report = revision.content
+        except Exception as e:  # noqa: BLE001
+            logger.warning("报告修订失败（保留当前版本）: %s", e)
+            break
+
+    return {
+        "final_report": current_report,
+        "messages": [AIMessage(content=current_report)],
+        "reflection_summary": [last_critique] if last_critique else [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory persistence node (Tier-1 + Tier-2)
+# Runs after the final report is generated: extracts durable user-profile facts
+# and indexes the report into the long-term research knowledge memory.
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+
+class UserProfileFacts(BaseModel):
+    """Structured facts extracted from a research conversation for long-term memory."""
+
+    target_role: str = _Field(default="", description="目标岗位/职业方向")
+    target_city: str = _Field(default="", description="期望工作城市")
+    skills: list[str] = _Field(default_factory=list, description="用户掌握的技能/技术栈")
+    education: str = _Field(default="", description="学历背景（如 本科/计算机科学）")
+    applied_companies: list[str] = _Field(default_factory=list, description="已投递/已面试的公司")
+    salary_expectation: str = _Field(default="", description="薪资预期")
+    career_goals: str = _Field(default="", description="短期/长期职业目标")
+
+
+async def extract_and_save_memory(state: AgentState, config: RunnableConfig):
+    """Persist cross-session memory after a research run completes.
+
+    - Tier-1: extract structured user-profile facts and save to long-term store.
+    - Tier-2: index the generated report into the research knowledge memory so
+      future runs on the same topic can recall prior findings.
+    """
+    configurable = Configuration.from_runnable_config(config)
+    model_config = {
+        "model": configurable.final_report_model,
+        "max_tokens": configurable.final_report_model_max_tokens,
+        "api_key": get_api_key_for_model(configurable.final_report_model, config),
+        "tags": ["langsmith:nostream"],
+    }
+
+    # --- Tier-1: extract user-profile facts from the conversation ---
+    # NOTE: ``with_structured_output`` on a ConfigurableModel may be a coroutine
+    # in some LangChain versions, so await it defensively to be version-agnostic.
+    structured = configurable_model.with_structured_output(UserProfileFacts)
+    if inspect.iscoroutine(structured):
+        structured = await structured
+    extractor = (
+        structured
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config(model_config)
+    )
+    conversation = get_buffer_string(state.get("messages", []))
+    try:
+        facts = await extractor.ainvoke([
+            HumanMessage(content=(
+                "从以下求职研究对话中抽取用户画像事实（仅填写对话中明确提及的字段，"
+                "未提及留空）。\n\n" + conversation
+            ))
+        ])
+        facts_dict = facts.model_dump() if hasattr(facts, "model_dump") else dict(facts)
+        # Drop empty fields to avoid overwriting prior memory with blanks
+        facts_dict = {k: v for k, v in facts_dict.items() if v}
+        if facts_dict:
+            await save_user_memory(facts_dict, config)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("抽取用户画像记忆失败（已跳过）: %s", e)
+
+    # --- Tier-2: index the final report into research knowledge memory ---
+    report = state.get("final_report", "")
+    if report:
+        # Use the research brief as the semantic topic key for recall
+        role_key = "general"
+        brief = state.get("research_brief", "")
+        try:
+            await save_research_memory(role_key, report[:2000], config)
+            if brief:
+                await save_research_memory(role_key, brief, config)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("保存研究知识记忆失败（已跳过）: %s", e)
+
+    return {}
+
+
 # Main Deep Researcher Graph Construction
 # Creates the complete deep research workflow from user input to final report
 deep_researcher_builder = StateGraph(
@@ -732,11 +949,15 @@ deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)        
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
 deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)       # Research execution phase
 deep_researcher_builder.add_node("final_report_generation", final_report_generation)  # Report generation phase
+deep_researcher_builder.add_node("reflect_and_revise_report", reflect_and_revise_report)  # Self-critique & revision
+deep_researcher_builder.add_node("extract_and_save_memory", extract_and_save_memory)  # Long-term memory persistence
 
 # Define main workflow edges for sequential execution
 deep_researcher_builder.add_edge(START, "clarify_with_user")                       # Entry point
 deep_researcher_builder.add_edge("research_supervisor", "final_report_generation") # Research to report
-deep_researcher_builder.add_edge("final_report_generation", END)                   # Final exit point
+deep_researcher_builder.add_edge("final_report_generation", "reflect_and_revise_report")  # Critique & revise
+deep_researcher_builder.add_edge("reflect_and_revise_report", "extract_and_save_memory")  # Persist memory
+deep_researcher_builder.add_edge("extract_and_save_memory", END)                   # Final exit point
 
 # Compile the complete deep researcher workflow
 deep_researcher = deep_researcher_builder.compile()

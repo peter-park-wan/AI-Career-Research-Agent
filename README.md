@@ -24,6 +24,31 @@ AI Career Research Agent 是一个面向 AI 岗位求职者的智能研究助手
 
 ## ✨ 核心功能
 
+### 🧠 三层记忆架构（Long-term Memory）
+
+本项目在 LangGraph `Store` 抽象之上实现了跨会话、跨任务的长期记忆，使 Agent 越用越"懂你"：
+
+> **第 1 层 · 用户画像记忆**（跨会话）
+> 基于 `InMemoryStore` / `PostgresStore` 的 `(user_id, "profile")` 命名空间，将每轮对话中明确的求职事实（目标岗位、技能栈、已投递公司、薪资预期等）用 Pydantic 结构化抽取后持久化。下次研究时 `load_user_profile` 会优先从长期记忆召回，无需重复填写简历。
+>
+> **第 2 层 · 研究知识记忆**（语义召回）
+> 每轮生成的报告切片写入 `("career-knowledge", role)` 命名空间并建立语义索引。后续同类岗位研究时，supervisor 会先召回历史结论作为起点，减少重复联网、结论持续迭代。
+>
+> **第 3 层 · 私有知识库 RAG**（向量检索）
+> 已支持将用户简历 / JD / 面经等资料通过 `ingest` 写入 Chroma（或 Supabase）向量库，由 `retrieve_knowledge_base` 工具检索。开启 `rag_force` 后，Agent 会被强制**优先检索私有资料再联网**，引用须标注来源文件。
+
+记忆后端通过 `MEMORY_STORE` 环境变量切换：`memory`（默认，进程内）、`postgres`（持久化 + 多副本共享，需 `MEMORY_STORE_POSTGRES_DSN`）、`none`（关闭）。
+
+### 🔍 自我反思与修订（Reflection）
+
+报告生成后并非直接输出，而是进入 **Reflexion 式批评-修订闭环**（`reflect_and_revise_report` 节点）：
+
+1. **Critic（批评者）** 用结构化输出（`ReportCritique`）从「覆盖度 / 事实一致性 / 引用质量 / 结构 / 深度」五个维度审查初稿，并与原始 `research_brief` 及原始 `notes`（事实依据）比对，检测遗漏与幻觉。
+2. 若批评认为需修订，则将批评反馈回 **Writer（撰写者）** 模型生成修订版；否则保留当前版本并停止迭代。
+3. 循环轮数由 `max_reflection_rounds` 控制（默认 1，可设 0 关闭 / 2-3 多轮），并将批评摘要写入 `reflection_summary` 供日志与前端展示。
+
+与原有 `think_tool`（仅过程性内心独白、无质量门禁）相比，本机制提供了**产出后的批判性自我审查与迭代改进**，显著提升「深度研究」产品的结论质量。
+
 ### 1. 岗位市场研究
 - 自动搜索目标岗位的招聘信息
 - 分析岗位需求趋势和市场热度
@@ -392,6 +417,8 @@ curl http://localhost:8000/health
 | `API_CHECKPOINTER` | `memory` | 研究图状态后端：`memory`（进程内，支持 `thread_id` 多轮记忆）/ `none`（无记忆，与原图一致）/ `postgres` / `redis`（共享后端，支持多副本与持久化） |
 | `API_CHECKPOINTER_POSTGRES_DSN` | 空 | `API_CHECKPOINTER=postgres` 时的连接串，如 `postgresql://user:pass@host:5432/db` |
 | `API_CHECKPOINTER_REDIS_URI` | 空 | `API_CHECKPOINTER=redis` 时的连接串，如 `redis://localhost:6379`（`redis` 模式需先安装 `langgraph-checkpoint-redis`） |
+| `MEMORY_STORE` | `memory` | 长期记忆（用户画像 / 研究知识）后端：`memory`（进程内，重启即丢失）/ `postgres`（持久化，需 `MEMORY_STORE_POSTGRES_DSN`）/ `none`（关闭长期记忆） |
+| `MEMORY_STORE_POSTGRES_DSN` | 空 | `MEMORY_STORE=postgres` 时的连接串，与 `API_CHECKPOINTER_POSTGRES_DSN` 可复用同一数据库 |
 | `API_GAP_CACHE` | `on` | 是否缓存 `run_gap_analysis` 结果以省去重复 LLM 开销（`off` 关闭） |
 | `API_GAP_CACHE_MAX` | `256` | Gap 缓存最大条目数，超出后整体清空 |
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | 单客户端 IP 每分钟最大请求数，`0` 表示不限流 |
@@ -445,6 +472,7 @@ curl http://localhost:8000/health
 | ENABLE_GITHUB_SEARCH | true | 是否启用 GitHub 搜索 |
 | MAX_GITHUB_RESULTS | 10 | GitHub 项目最大返回数 |
 | SKILL_MATCH_THRESHOLD | 0.6 | 技能匹配阈值 |
+| MAX_REFLECTION_ROUNDS | 1 | 报告生成后的自我批评-修订轮数（0=关闭，1=批评一轮并修订，2-3=多轮迭代，质量更高但更耗 token） |
 
 ### LangGraph UI 配置
 
@@ -463,6 +491,12 @@ pytest tests/test_deep_researcher.py
 
 # 运行求职功能专属测试（无需 API Key，LLM 调用已 mock）
 pytest tests/test_career_features.py -q
+
+# 运行三层记忆架构测试（用户画像 / 研究知识 / RAG 配置；store 用进程内 InMemoryStore，LLM 调用已 mock）
+pytest tests/test_memory.py -q
+
+# 运行自我反思节点测试（Critic 结构化批评 → Writer 修订；LLM 调用已 mock）
+pytest tests/test_reflection.py -q
 ```
 
 ### 求职功能测试覆盖
@@ -473,6 +507,15 @@ pytest tests/test_career_features.py -q
 | --- | --- |
 | `profile.load_user_profile` | 内联画像优先于简历文件、缺失文件回退为空 |
 | `utils.calculate_skill_match_score` | 满分 / 空输入 / 部分匹配（matched ÷ required） |
+
+`tests/test_memory.py` 覆盖了三层记忆的读写与召回（`save_user_memory` / `load_user_memory` / `save_research_memory` / `recall_research_memory`）、`extract_and_save_memory` 节点（用同步 Mock 链模拟生产模型行为，避免真实 LLM 调用）、以及 `Configuration.rag_force` 配置项。
+
+| 测试对象 | 覆盖内容 |
+| --- | --- |
+| `memory.save_user_memory` / `load_user_memory` | 写入后语义召回命中、空记忆返回空、匿名用户 namespace |
+| `memory.save_research_memory` / `recall_research_memory` | 报告切片语义召回、缺失返回空 |
+| `deep_researcher.extract_and_save_memory` | 结构化抽取用户画像并持久化 |
+| `configuration.Configuration` | `rag_force` 默认关闭、可显式开启 |
 | `utils.extract_user_profile_from_messages` | 从用户消息抽取目标岗位、城市、技能 |
 | `CareerConfig` / `Configuration` | 默认值、从 `configurable` 构建 |
 | `utils.get_all_tools` | 按开关注入 `search_github_projects` / `analyze_job_fit` / `retrieve_knowledge_base` |
@@ -516,7 +559,8 @@ client.evaluate(
 - [ ] Web 前端界面优化
 - [x] Docker 部署配置
 - [x] API 接口封装（FastAPI：研究图 + 求职各阶段 + SSE 流式）
-- [ ] 用户记忆功能（Memory）
+- [x] 用户记忆功能（Memory）：三层长期记忆架构（用户画像 / 研究知识 / 私有库 RAG）
+- [x] 自我反思与修订（Reflection）：Reflexion 式 Critic→Revise 闭环，结构化批评 + 迭代修订 + 轮数可控
 
 ---
 

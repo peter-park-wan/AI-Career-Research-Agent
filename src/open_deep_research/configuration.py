@@ -269,6 +269,19 @@ class Configuration(BaseModel):
             }
         }
     )
+    max_reflection_rounds: int = Field(
+        default=1,
+        json_schema_extra={
+            "x_oap_ui_config": {
+                "type": "slider",
+                "default": 1,
+                "min": 0,
+                "max": 3,
+                "step": 1,
+                "description": "报告生成后的自我批评-修订轮数。0 = 关闭反思（保持原行为），1 = 批评一轮并修订，2-3 = 多轮迭代（更高质量但更耗 token）。"
+            }
+        }
+    )
     max_react_tool_calls: int = Field(
         default=10,
         json_schema_extra={
@@ -468,7 +481,17 @@ class Configuration(BaseModel):
             }
         }
     )
-    
+    rag_force: bool = Field(
+        default=False,
+        json_schema_extra={
+            "x_oap_ui_config": {
+                "type": "boolean",
+                "default": False,
+                "description": "强制优先检索私有知识库：在 RAG 启用时，要求 Agent 在联网检索前先检索简历/JD/面经等私有资料。"
+            }
+        }
+    )
+
     # Career Research Configuration
     career_config: Optional[CareerConfig] = Field(
         default=None,

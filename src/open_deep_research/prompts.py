@@ -317,6 +317,53 @@ Format the report in clear markdown with proper structure and include source ref
 </Citation Rules>
 """
 
+report_critique_prompt = """You are a rigorous senior research reviewer. Critique the draft research report below against BOTH the original research brief and the raw findings.
+
+<Research Brief>
+{research_brief}
+</Research Brief>
+
+<Draft Report>
+{draft_report}
+</Draft Report>
+
+<Raw Findings (for fact-checking)>
+{findings}
+</Raw Findings>
+
+Evaluate the report on these dimensions and be specific:
+1. COVERAGE: Does it fully answer every part of the research brief? List any missing sub-questions.
+2. FACTUAL_CONSISTENCY: Are claims supported by the raw findings? Flag any hallucination or unsupported assertion.
+3. CITATIONS: Are sources cited where claims are made? Are citation URLs valid and relevant?
+4. STRUCTURE: Is it well-organized, readable, and in the same language as the user's input?
+5. DEPTH: Is the analysis sufficiently deep for a "deep research" product, or too shallow/surfacy?
+
+Respond ONLY with the structured critique. If the report is already strong and needs no major revision, set needs_revision to false and keep revision_suggestions empty.
+"""
+
+report_revision_prompt = """You are the same report author. Revise the draft report below using the reviewer's critique.
+
+<Original Research Brief>
+{research_brief}
+</Original Research Brief>
+
+<Draft Report to Revise>
+{draft_report}
+</Draft Report>
+
+<Reviewer Critique>
+{critique}
+</Reviewer Critique>
+
+<Raw Findings (authoritative source of truth)>
+{findings}
+</Raw Findings>
+
+Apply the critique to improve the report: fill coverage gaps, remove unsupported claims, fix/add citations, and improve structure/depth.
+Preserve everything that was already good. Keep the same language as the user's input. Output ONLY the revised full report in markdown.
+"""
+
+
 
 summarize_webpage_prompt = """You are tasked with summarizing the raw content of a webpage retrieved from a web search. Your goal is to create a summary that preserves the most important information from the original web page. This summary will be used by a downstream research agent, so it's crucial to maintain the key details without losing essential information.
 

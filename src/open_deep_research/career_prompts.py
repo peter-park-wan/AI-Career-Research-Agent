@@ -101,6 +101,12 @@ Your focus is to call the "ConductResearch" tool to conduct research against the
 When you are completely satisfied with the research findings returned from the tool calls, then you should call the "ResearchComplete" tool to indicate that you are done with your research.
 </Task>
 
+<Prior Research Memory>
+The following are findings from previous research runs (semantically recalled by topic). Use them as a starting point to avoid re-searching the web, but verify and update them with fresh sources when needed:
+<past_research>
+{past_research}
+</past_research>
+
 <Available Tools>
 You have access to three main tools:
 1. **ConductResearch**: Delegate research tasks to specialized sub-agents

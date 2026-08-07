@@ -379,6 +379,66 @@ def _build_checkpointer(mode: str):
     return MemorySaver()
 
 
+def _build_store():
+    """构造长期记忆 Store，供跨会话记忆（用户画像 / 研究知识）使用。
+
+    通过 MEMORY_STORE 环境变量选择后端：
+      - memory   （默认）进程内 InMemoryStore，开发/单副本；重启即丢失
+      - postgres 需设置 MEMORY_STORE_POSTGRES_DSN，支持持久化与多副本共享
+      - none     不挂载 Store，长期记忆退化为无操作（不影响单次任务运行）
+
+    返回 ``None`` 表示不挂载；此时 memory 模块会自动使用进程内兜底 Store。
+    """
+    mode = os.getenv("MEMORY_STORE", "memory").lower()
+    if mode in ("none", "off", "false"):
+        return None
+    if mode in ("", "memory"):
+        try:
+            from langgraph.store.memory import InMemoryStore
+
+            return InMemoryStore(index=None)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("InMemoryStore 初始化失败：%s", e)
+            return None
+    if mode == "postgres":
+        dsn = os.getenv("MEMORY_STORE_POSTGRES_DSN") or os.getenv("POSTGRES_DSN")
+        if not dsn:
+            logger.warning(
+                "MEMORY_STORE=postgres 但未设置连接串，回退到 memory"
+            )
+            from langgraph.store.memory import InMemoryStore
+
+            return InMemoryStore(index=None)
+        try:
+            from langgraph.store.postgres import PostgresStore
+
+            store = PostgresStore.from_conn_string(dsn)
+            # Best-effort 表结构初始化
+            setup = getattr(store, "setup", None)
+            if callable(setup):
+                try:
+                    res = setup()
+                    if hasattr(res, "__await__"):
+                        logger.warning(
+                            "PostgresStore.setup() 为协程，需在其事件循环中 await；"
+                            "如首次写入报错请手动执行 setup()"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "PostgresStore.setup() 失败（表可能已存在，可忽略）：%s", e
+                    )
+            return store
+        except Exception as e:  # noqa: BLE001
+            logger.warning("PostgresStore 初始化失败，回退 memory: %s", e)
+            from langgraph.store.memory import InMemoryStore
+
+            return InMemoryStore(index=None)
+    logger.warning("未知 MEMORY_STORE=%s，回退到 memory", mode)
+    from langgraph.store.memory import InMemoryStore
+
+    return InMemoryStore(index=None)
+
+
 def _get_research_graph():
     global _RESEARCH_GRAPH
     if _RESEARCH_GRAPH is not None:
@@ -386,11 +446,14 @@ def _get_research_graph():
 
     mode = os.getenv("API_CHECKPOINTER", "memory").lower()
     cp = _build_checkpointer(mode)
+    store = _build_store()
     try:
         if cp is None:
             from open_deep_research.deep_researcher import deep_researcher
 
-            _RESEARCH_GRAPH = deep_researcher
+            _RESEARCH_GRAPH = (
+                deep_researcher.compile(store=store) if store is not None else deep_researcher
+            )
         else:
             # 表结构初始化（best-effort；若为异步 setup 会给出提示）
             setup = getattr(cp, "setup", None)
@@ -409,7 +472,10 @@ def _get_research_graph():
 
             from open_deep_research.deep_researcher import deep_researcher_builder
 
-            _RESEARCH_GRAPH = deep_researcher_builder.compile(checkpointer=cp)
+            compile_kwargs = {"checkpointer": cp}
+            if store is not None:
+                compile_kwargs["store"] = store
+            _RESEARCH_GRAPH = deep_researcher_builder.compile(**compile_kwargs)
     except Exception as e:  # noqa: BLE001
         logger.warning("研究图编译失败，回退无 checkpointer 版本：%s", e)
         from open_deep_research.deep_researcher import deep_researcher

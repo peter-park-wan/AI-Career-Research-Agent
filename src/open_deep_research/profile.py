@@ -8,6 +8,7 @@ import os
 from langchain_core.runnables import RunnableConfig
 
 from open_deep_research.configuration import Configuration
+from open_deep_research.memory import load_user_memory
 
 
 def load_user_profile(config: RunnableConfig) -> str:
@@ -16,7 +17,11 @@ def load_user_profile(config: RunnableConfig) -> str:
     Resolution priority:
         1. explicit ``user_profile`` text configured inline (highest)
         2. resume file located at ``resume_path``
-        3. empty string (agent simply has no background context)
+        3. long-term memory recalled from the Store (cross-session)
+        4. empty string (agent simply has no background context)
+
+    The long-term memory (Tier-1) lets the agent "remember" who you are across
+    separate research runs, e.g. target role, skills and applied companies.
     """
     configurable = Configuration.from_runnable_config(config)
     career = configurable.career_config
@@ -34,4 +39,6 @@ def load_user_profile(config: RunnableConfig) -> str:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read().strip()
 
-    return ""
+    # 3. Fall back to cross-session long-term memory (may be empty on first run)
+    recalled = load_user_memory(config)
+    return recalled
