@@ -8,7 +8,7 @@
     "dependencies": [
       "."
     ],
-    "store": "./src/open_deep_research/store.py:store",
+    "store": { "path": "./src/open_deep_research/store.py:store" },
     "auth": {
       "path": "./src/security/auth.py:auth"
     }

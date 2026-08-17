@@ -5,7 +5,7 @@ import inspect
 import logging
 from pydantic import BaseModel, Field as _Field
 
-from AI_Career_Research_Agent.src.open_deep_research.state import ConductResearch, ResearchComplete
+from open_deep_research.state import ConductResearch, ResearchComplete
 from langchain_core.tools.base import BaseTool
 from typing import Literal
 
