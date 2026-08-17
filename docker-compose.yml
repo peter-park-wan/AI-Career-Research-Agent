@@ -1,24 +1,20 @@
 services:
-  api:
-    build: .
+  langgraph-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ai-career-research-agent:latest
     container_name: ai-career-research-agent
     ports:
-      - "${API_PORT:-8000}:8000"
-    env_file:
-      - .env
+      - "2024:2024"   # langgraph dev / Studio 界面端口
     environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - API_BEARER_TOKEN=${API_BEARER_TOKEN:-}
-      - API_CORS_ORIGINS=${API_CORS_ORIGINS:-*}
+      # LLM 提供方 API Key（演示真实调用时填写；不填则仅能启动、接口会报缺 Key）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # langgraph dev 端口
+      - LANGGRAPH_PORT=2024
     volumes:
-      # 挂载简历/知识库目录，便于不重建镜像更新资料
+      # 持久化可写数据（简历 / 知识库）。如需 RAG，把索引放宿主 ./data/rag_index
       - ./data:/app/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s

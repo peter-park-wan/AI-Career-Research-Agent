@@ -391,46 +391,56 @@ curl -N -X POST http://localhost:8000/api/research/stream \
 
 ## 🐳 Docker 部署
 
-项目已提供 `Dockerfile` 与 `docker-compose.yml`，可一键容器化部署 FastAPI 服务。
+项目已提供 `Dockerfile` 与 `docker-compose.yml`，可将 **`langgraph dev`（含 Studio 可视化界面）** 打包为镜像，在任意装有 Docker 的平台（Linux / macOS / 云服务器）一键启动。
+
+### 方式一：docker compose 一键启动（推荐）
 
 ```bash
-# 1. 配置环境变量
-cp .env.example .env   # 填入 API Key 等
+# 1. 准备环境变量（填入 LLM 提供方 API Key，不填则仅能启动、调用时会报缺 Key）
+cp .env.example .env
+# 编辑 .env，至少填一个：OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
 
-# 2. 构建并启动（后台）
+# 2. 构建并后台启动
 docker compose up -d --build
 
-# 3. 验证
-curl http://localhost:8000/health
+# 3. 查看日志（等待出现 "Application started up" 与 Studio 链接）
+docker compose logs -f
+
+# 4. 浏览器打开日志中的 Studio 地址，形如：
+#    https://smith.langchain.com/studio/?baseUrl=http://<你的IP>:2024
+#    本机直接访问 http://localhost:2024 亦可
 ```
 
-常用环境变量（写入 `.env` 或 `docker-compose.yml` 的 `environment`）：
+- 服务端口：`2024`（已在 `docker-compose.yml` 中映射到宿主 `2024:2024`）。
+- 数据卷：`./data` 已挂载到容器 `/app/data`，修改简历（`data/简历.md`）或知识库后无需重建镜像即可生效。
+- 停服：`docker compose down`。
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `API_PORT` | `8000` | 宿主机映射端口 |
-| `API_BEARER_TOKEN` | 空 | 设置后开启 Bearer 鉴权 |
-| `API_CORS_ORIGINS` | `*` | 逗号分隔的允许跨域来源 |
-| `API_HOST` | `0.0.0.0` | 监听地址 |
-| `API_MAX_MESSAGES` | `50` | 单次研究请求的最大消息条数（超出返回 413） |
-| `API_RESEARCH_TIMEOUT` | `0` | 研究接口整体超时（秒），`0` 表示不限制 |
-| `API_CHECKPOINTER` | `memory` | 研究图状态后端：`memory`（进程内，支持 `thread_id` 多轮记忆）/ `none`（无记忆，与原图一致）/ `postgres` / `redis`（共享后端，支持多副本与持久化） |
-| `API_CHECKPOINTER_POSTGRES_DSN` | 空 | `API_CHECKPOINTER=postgres` 时的连接串，如 `postgresql://user:pass@host:5432/db` |
-| `API_CHECKPOINTER_REDIS_URI` | 空 | `API_CHECKPOINTER=redis` 时的连接串，如 `redis://localhost:6379`（`redis` 模式需先安装 `langgraph-checkpoint-redis`） |
-| `MEMORY_STORE` | `memory` | 长期记忆（用户画像 / 研究知识）后端：`memory`（进程内，重启即丢失）/ `postgres`（持久化，需 `MEMORY_STORE_POSTGRES_DSN`）/ `none`（关闭长期记忆） |
-| `MEMORY_STORE_POSTGRES_DSN` | 空 | `MEMORY_STORE=postgres` 时的连接串，与 `API_CHECKPOINTER_POSTGRES_DSN` 可复用同一数据库 |
-| `API_GAP_CACHE` | `on` | 是否缓存 `run_gap_analysis` 结果以省去重复 LLM 开销（`off` 关闭） |
-| `API_GAP_CACHE_MAX` | `256` | Gap 缓存最大条目数，超出后整体清空 |
-| `API_RATE_LIMIT_PER_MINUTE` | `0` | 单客户端 IP 每分钟最大请求数，`0` 表示不限流 |
-| `API_RELOAD` | `false` | 本地开发热重载（`python -m open_deep_research.api` 生效；容器 `CMD` 用 uvicorn 不带 `--reload`，需手动加） |
+### 方式二：docker run 单独启动
 
-> **多轮记忆**：研究接口默认挂载进程内 checkpointer，传入同一个 `thread_id` 即可跨请求续聊——客户端**只需发送本轮新增消息**，历史由服务端按 `thread_id` 维护。注意：进程内 checkpointer 在容器重启或横向扩容（多副本）后会丢失，生产环境请将 `API_CHECKPOINTER` 设为 `postgres` 或 `redis` 以共享会话状态（需提供对应连接串）。启用共享后端需额外安装依赖：`pip install ".[api,postgres]"` 或 `pip install ".[api,redis]"`；容器化部署时，请将 `Dockerfile` 中的 `pip install -e ".[api]"` 改为 `pip install -e ".[api,postgres]"`（或 `.[api,redis]`）后重新构建镜像（`docker-compose.yml` 本身无 `build.args`，需改 `Dockerfile` 或改用多阶段构建）。
+```bash
+docker build -t ai-career-research-agent .
+docker run -d --name ai-career-research-agent \
+  -p 2024:2024 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -v "$PWD/data:/app/data" \
+  ai-career-research-agent
+```
 
-> **限流**：默认关闭（`API_RATE_LIMIT_PER_MINUTE=0`）。开启后基于客户端 IP（优先取 `X-Forwarded-For`）做 60 秒滑动窗口限流，命中返回 `429` 并带 `Retry-After`。生产多副本场景建议改用 Redis 等共享限流。
+### 镜像构建说明
 
-> **Gap 缓存**：`/api/career/gap-analysis`、`/api/career/interview`、`/api/career/resume` 等接口复用同一份匹配度分析结果；相同 `jd_text` + `config.configurable` 只调用一次 LLM，后续命中缓存。若简历文件等内容在进程内被外部修改，请设置 `API_GAP_CACHE=off` 或重启服务。
+- 基础镜像 `python:3.11-slim`，仅构建当前宿主架构（x86_64）。若需在 Apple Silicon（arm64）等平台构建/运行，请在目标机器上执行，或改用 `docker buildx build --platform linux/amd64,linux/arm64`。
+- 容器内通过 `langgraph dev --host 0.0.0.0 --port 2024 --allow-blocking` 启动，与本地 `uvx` 验证过的命令一致。
+- `langgraph-cli[inmem]` 已由项目主依赖引入，无需额外安装。
 
-> 流式研究接口（`/api/research/stream`）在 SSE 流结束时额外推送一个 `{"type":"result","content":...}` 事件，包含完整最终答案，客户端无需自行拼接。
+### 可选：改用 FastAPI 服务形态
+
+如需改用纯 FastAPI 服务（端口 `8000`，见「API 服务」章节的 `API_*` 环境变量），可将 `Dockerfile` 末尾的 `CMD` 替换为：
+
+```dockerfile
+CMD ["sh", "-c", "uvicorn open_deep_research.api:app --host 0.0.0.0 --port 8000"]
+```
+
+并将 `docker-compose.yml` 的端口映射改为 `8000:8000`、补充对应 `API_*` 环境变量。
 
 > 容器已挂载 `./data` 目录，更新简历（`data/简历.md`）或知识库后无需重建镜像即可生效。如需 RAG，请先按上文「RAG 私有知识库」构建索引（索引目录默认在 `.dockerignore` 中被忽略，构建镜像时不会打包，请在运行容器内或挂载卷中准备）。
 

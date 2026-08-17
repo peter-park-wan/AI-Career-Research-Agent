@@ -25,3 +25,9 @@ data/rag_index/
 Dockerfile
 docker-compose.yml
 .dockerignore
+.env
+*.log
+pipver.txt
+
+# RAG 索引（体积大，运行时按需挂载/生成；如需内置可删除此行）
+data/rag_index/
