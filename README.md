@@ -158,6 +158,9 @@ AI_Career_Research_Agent/
 ├── .env.example                # 环境变量示例
 ├── pyproject.toml              # 项目配置
 ├── langgraph.json              # LangGraph 部署配置
+├── streamlit_app.py            # Streamlit 中文 Web 界面
+├── Dockerfile                  # 容器构建（langgraph dev）
+├── docker-compose.yml          # 容器编排
 └── README.md                   # 项目文档
 ```
 
@@ -174,12 +177,20 @@ AI_Career_Research_Agent/
 ### 安装依赖
 
 ```bash
-# 使用 pip
+# 使用 pip（基础能力：Agent / 工作流 / 命令行研究）
 pip install -e .
+
+# 按需安装 extras，可自由组合
+pip install -e ".[api]"      # FastAPI 服务（HTTP 接口）
+pip install -e ".[ui]"       # Streamlit 中文界面
+pip install -e ".[api,ui]"   # 两者都要（想用 Web 界面时推荐）
 
 # 或使用 poetry
 poetry install
 ```
+
+> 常见坑：`pip install -e .` **不包含** `fastapi` / `streamlit`，直接启动 API 或前端会报
+> `ModuleNotFoundError`。请按上面 extras 安装。
 
 ### 配置环境变量
 
@@ -389,6 +400,49 @@ curl -N -X POST http://localhost:8000/api/research/stream \
   -d '{"messages":[{"role":"user","content":"分析上海 AI 工程师的就业前景"}]}'
 ```
 
+## 🖥️ Web 界面（Streamlit）
+
+项目内置一个**中文 Streamlit 前端**（`streamlit_app.py`），把求职全流程与深度研究封装成可视化界面，无需手搓 `curl` 或阅读 Swagger。
+
+### 启动
+
+```bash
+# 1. 安装前端依赖（已拆到 ui extras）
+pip install -e ".[ui]"
+
+# 2. 先启动后端 API 服务（默认 8000 端口）
+uvicorn open_deep_research.api:app --host 0.0.0.0 --port 8000
+
+# 3. 另开一个终端启动前端（默认 8501 端口）
+streamlit run streamlit_app.py
+```
+
+浏览器打开 http://localhost:8501 即可使用。
+
+### 功能页签
+
+| 页签 | 对应接口 | 说明 |
+|------|----------|------|
+| 🏠 服务与画像 | `GET /health`、`GET /api/profile` | 检测后端连通性、查看候选人背景画像 |
+| 🔍 岗位发现 | `POST /api/career/discover-jobs` | 推荐优先投递的岗位方向与公司类型 |
+| 📊 匹配度分析 | `POST /api/career/gap-analysis` | 粘贴 JD 做人岗匹配度分析（内置示例 JD，便于演示） |
+| 🎤 面试准备 | `POST /api/career/interview` | 生成可直接备考的面试清单 |
+| 📄 简历优化 | `POST /api/career/resume` | 优化建议 + 改写后的核心经历 bullet |
+| ✉️ 求职信 | `POST /api/career/cover-letter` | 生成中文求职信 |
+| 🚀 端到端工作流 | `POST /api/career/workflow` | 一次跑完六个阶段，输出整合报告与各阶段产物 |
+| 🧠 深度研究（流式） | `POST /api/research/stream` | SSE 实时展示研究过程与最终研究报告 |
+
+### 侧边栏配置
+
+- **后端 API 地址**：默认 `http://localhost:8000`，可指向任意远程服务；
+- **Bearer Token**：仅当后端设置了 `API_BEARER_TOKEN` 时需要填写；
+- **会话 `thread_id`**：相同 ID 可跨请求复用多轮记忆（依赖后端 checkpointer）；
+- **目标岗位 / 目标城市**：各求职页签共用；
+- **高级配置 `configurable`**：以 JSON 覆盖 `Configuration` 配置项，如 `{"search_api": "tavily"}`。
+
+> - 每份结果都支持**一键下载 Markdown**，便于带走使用。
+> - 前端只负责展示与调用，**真正的能力由后端 API 提供**，因此使用前必须先启动后端服务；深度研究与端到端工作流涉及多次 LLM 调用，耗时较长，请耐心等待。
+
 ## 🐳 Docker 部署
 
 项目已提供 `Dockerfile` 与 `docker-compose.yml`，可将 **`langgraph dev`（含 Studio 可视化界面）** 打包为镜像，在任意装有 Docker 的平台（Linux / macOS / 云服务器）一键启动。
@@ -566,7 +620,7 @@ client.evaluate(
 - [x] 端到端求职工作流编排（岗位发现→调研→匹配度→面试准备→简历优化→求职信）
 - [x] 求职功能单元测试 + LangSmith 评估器
 - [x] 项目文档完善
-- [ ] Web 前端界面优化
+- [x] Web 前端界面（Streamlit 中文界面，覆盖求职全流程 + 流式深度研究，支持结果下载）
 - [x] Docker 部署配置
 - [x] API 接口封装（FastAPI：研究图 + 求职各阶段 + SSE 流式）
 - [x] 用户记忆功能（Memory）：三层长期记忆架构（用户画像 / 研究知识 / 私有库 RAG）
