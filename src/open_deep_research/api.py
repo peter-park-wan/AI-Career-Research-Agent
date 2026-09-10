@@ -30,7 +30,7 @@ from contextlib import nullcontext as _nullcontext
 logger = logging.getLogger(__name__)
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import (
@@ -151,6 +151,10 @@ class CareerStageRequest(BaseModel):
     jd_text: Optional[str] = Field(default=None, description="可选 JD，用于更精准分析")
     configurable: Optional[Dict[str, Any]] = Field(default=None)
     thread_id: Optional[str] = Field(default=None)
+
+
+class ProfileTextRequest(BaseModel):
+    content: str = Field(..., description="简历 / 背景资料全文（Markdown 或纯文本）")
 
 
 # --------------------------------------------------------------------------- #
@@ -578,6 +582,117 @@ async def get_profile(configurable: Optional[str] = None):
         json.loads(configurable) if configurable else None, None
     )
     return {"profile": load_user_profile(cfg)}
+
+
+# --------------------------------------------------------------------------- #
+# 简历 / 背景资料写入（供 Web 界面上传与在线编辑使用）
+# --------------------------------------------------------------------------- #
+_UPLOAD_MAX_BYTES = int(os.getenv("API_UPLOAD_MAX_MB", "5")) * 1024 * 1024
+_UPLOAD_ALLOWED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf"}
+
+
+def _resolve_resume_path() -> str:
+    """解析简历保存路径：优先 CareerConfig.resume_path，回退 ./data/简历.md。"""
+    try:
+        from open_deep_research.configuration import CareerConfig, Configuration
+
+        # 与 load_user_profile 保持一致：未启用 CareerConfig 时回退默认配置
+        career = Configuration.from_runnable_config({}).career_config or CareerConfig()
+        path = getattr(career, "resume_path", None)
+        if path:
+            return path
+    except Exception as e:  # noqa: BLE001
+        logger.warning("解析 resume_path 失败，使用默认路径：%s", e)
+    return "./data/简历.md"
+
+
+def _extract_text(filename: str, raw: bytes) -> str:
+    """把上传文件解析为纯文本：md/txt 直接解码，PDF 用 PyMuPDF 提取文字。"""
+    suffix = os.path.splitext(filename)[1].lower()
+    if suffix == ".pdf":
+        try:
+            import pymupdf  # PyMuPDF 新版本的导入名
+        except ImportError:
+            try:
+                import fitz as pymupdf  # type: ignore  # 旧版本兼容
+            except ImportError as e:
+                raise HTTPException(
+                    status_code=500, detail=f"PDF 解析需要 pymupdf 依赖：{e}"
+                )
+        try:
+            with pymupdf.open(stream=raw, filetype="pdf") as doc:
+                return "\n".join(page.get_text() for page in doc).strip()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"PDF 解析失败：{e}")
+
+    for encoding in ("utf-8", "gbk", "utf-16"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _write_resume(text: str) -> Dict[str, Any]:
+    """把背景资料文本写入 resume_path，返回保存结果。"""
+    path = _resolve_resume_path()
+    try:
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"保存失败：{e}")
+    return {"status": "ok", "path": path, "chars": len(text)}
+
+
+@app.post("/api/profile", dependencies=[Depends(require_token)], tags=["career"])
+async def save_profile(body: ProfileTextRequest):
+    """保存候选人背景资料文本（覆盖 resume_path 指向的文件）。"""
+    content = body.content or ""
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="内容为空，未保存")
+    if len(content.encode("utf-8")) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"内容过大，上限 {_UPLOAD_MAX_BYTES // 1024 // 1024} MB",
+        )
+    return _write_resume(content)
+
+
+@app.post(
+    "/api/profile/upload", dependencies=[Depends(require_token)], tags=["career"]
+)
+async def upload_profile(file: UploadFile = File(...)):
+    """上传简历文件（.md/.txt/.pdf），解析后覆盖保存到 resume_path。"""
+    filename = file.filename or ""
+    suffix = os.path.splitext(filename)[1].lower()
+    if suffix not in _UPLOAD_ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"不支持的文件类型（{suffix or '未知'}），"
+                f"仅支持 {', '.join(sorted(_UPLOAD_ALLOWED_SUFFIXES))}"
+            ),
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(raw) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，上限 {_UPLOAD_MAX_BYTES // 1024 // 1024} MB",
+        )
+
+    text = _extract_text(filename, raw)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="未能从文件中提取到文本内容")
+
+    result = _write_resume(text)
+    result["filename"] = filename
+    result["preview"] = text[:300]
+    return result
 
 
 @app.post(

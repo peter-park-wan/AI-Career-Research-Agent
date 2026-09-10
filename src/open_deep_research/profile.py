@@ -7,7 +7,7 @@ researchers can tailor findings to your skills, experience and goals.
 import os
 from langchain_core.runnables import RunnableConfig
 
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import CareerConfig, Configuration
 from open_deep_research.memory import load_user_memory
 
 
@@ -26,7 +26,10 @@ def load_user_profile(config: RunnableConfig) -> str:
     configurable = Configuration.from_runnable_config(config)
     career = configurable.career_config
     if not career:
-        return ""
+        # CareerConfig 默认未启用（它还兼作 deep research 的工具挂载开关），
+        # 但「把简历放到 data/简历.md 即自动生效」是对用户的既定约定，
+        # 因此这里回退到默认配置继续解析，而不是直接返回空。
+        career = CareerConfig()
 
     # 1. Explicit inline profile text takes highest priority
     explicit = getattr(career, "user_profile", None)

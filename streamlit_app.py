@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
 import requests
@@ -42,6 +43,9 @@ SAMPLE_JD = """招聘 AI 工程师（社招，3-5 年经验）
 4. 了解 LangChain / LangGraph、向量数据库（Milvus / Chroma）者优先；
 5. 有大规模数据处理经验，熟悉 Docker、Kubernetes 加分。
 """
+
+# 历史记录保存目录（位于前端进程所在机器，刷新/重启后仍可回看）
+HISTORY_DIR = Path("data/history")
 
 # 页面标题 -> 渲染函数，见文件末尾的 PAGES
 PAGES: Dict[str, Any] = {}
@@ -187,6 +191,42 @@ def stream_research(payload: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
             continue
 
 
+def upload_resume(uploaded) -> Optional[Dict[str, Any]]:
+    """把用户选择的文件上传到后端 ``/api/profile/upload``。
+
+    走后端写入而不是前端直接落盘，这样后端部署在远程服务器或容器里时同样生效。
+    """
+    try:
+        files = {
+            "file": (
+                uploaded.name,
+                uploaded.getvalue(),
+                uploaded.type or "application/octet-stream",
+            )
+        }
+    except Exception as e:  # noqa: BLE001
+        st.error(f"读取文件失败：{e}")
+        return None
+
+    # multipart 请求必须让 requests 自动生成 boundary，故去掉手写的 Content-Type
+    headers = {k: v for k, v in _headers().items() if k.lower() != "content-type"}
+    try:
+        resp = requests.post(
+            f"{_base_url()}/api/profile/upload",
+            headers=headers,
+            files=files,
+            timeout=(10, 120),
+        )
+    except requests.RequestException as e:
+        st.error(f"上传失败：{e}")
+        return None
+
+    if resp.status_code != 200:
+        st.error(f"上传失败（HTTP {resp.status_code}）：{_safe_detail(resp)}")
+        return None
+    return resp.json()
+
+
 # --------------------------------------------------------------------------- #
 # 渲染辅助
 # --------------------------------------------------------------------------- #
@@ -233,8 +273,38 @@ def render_content(title: str, content: Any, download_name: Optional[str] = None
 
 
 def save_result(key: str, value: Any) -> None:
-    """把结果写入会话缓存，便于切换页面后仍可查看。"""
+    """把结果写入会话缓存并落盘，便于切换页面或重启后仍可查看。"""
     st.session_state.results[key] = value
+    _append_history(key, value)
+
+
+def _append_history(key: str, value: Any) -> None:
+    """把结果写入本地历史目录；失败只告警，不影响主流程。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        body = (
+            value
+            if isinstance(value, str)
+            else json.dumps(value, ensure_ascii=False, indent=2)
+        )
+        filename = f"{time.strftime('%Y%m%d-%H%M%S')}_{key}.md"
+        (HISTORY_DIR / filename).write_text(body, encoding="utf-8")
+    except OSError as e:
+        st.sidebar.warning(f"历史记录保存失败：{e}")
+
+
+def list_history() -> list[Path]:
+    """返回历史记录文件列表（按文件名倒序，即最近在前）。"""
+    if not HISTORY_DIR.is_dir():
+        return []
+    return sorted(HISTORY_DIR.glob("*.md"), key=lambda p: p.name, reverse=True)
+
+
+def get_shared_jd() -> str:
+    """返回侧边栏中全局共享的 JD 文本，避免各页签重复粘贴。"""
+    return str(st.session_state.get("shared_jd", "") or "")
 
 
 def common_payload(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -283,6 +353,19 @@ def render_sidebar() -> str:
     )
 
     st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 职位描述 JD（全局共享）")
+    st.sidebar.caption("填写一次，匹配度 / 面试 / 简历 / 求职信 / 工作流页签共用")
+    st.sidebar.text_area(
+        "JD 全文",
+        key="shared_jd",
+        height=150,
+        placeholder="粘贴目标岗位 JD；留空则按「目标岗位」生成",
+        label_visibility="collapsed",
+    )
+    if st.sidebar.button("📄 填入示例 JD"):
+        st.session_state.shared_jd = SAMPLE_JD
+
+    st.sidebar.markdown("---")
     if st.sidebar.button("🩺 检测后端连接"):
         health = api_get("/health", timeout=10)
         if health:
@@ -318,17 +401,66 @@ def page_overview() -> None:
             st.json(info)
 
     st.markdown("---")
-    if st.button("🔄 重新加载候选人画像"):
-        st.session_state.results.pop("profile", None)
 
+    # ---------------------------- 简历上传 ---------------------------- #
+    st.subheader("📤 上传简历")
+    st.caption(
+        "支持 .md / .txt / .pdf。上传后由后端解析并覆盖保存，"
+        "「匹配度分析 / 面试准备 / 简历优化 / 工作流」都会基于它计算"
+    )
+    uploaded = st.file_uploader(
+        "选择简历文件",
+        type=["md", "markdown", "txt", "pdf"],
+        key="resume_uploader",
+        label_visibility="collapsed",
+    )
+    if uploaded is not None:
+        st.info(f"已选择：**{uploaded.name}**（{uploaded.size / 1024:.1f} KB）")
+        if st.button("⬆️ 上传到服务器并生效", type="primary"):
+            with st.spinner("正在上传并解析…"):
+                result = upload_resume(uploaded)
+            if result:
+                st.success(
+                    f"上传成功：共 {result.get('chars')} 字，已保存到 `{result.get('path')}`"
+                )
+                preview = result.get("preview") or ""
+                if preview:
+                    with st.expander("👀 内容预览", expanded=False):
+                        st.text(preview)
+                st.session_state.results.pop("profile", None)
+                st.rerun()
+
+    # ---------------------------- 在线编辑 ---------------------------- #
+    st.subheader("✏️ 在线编辑简历")
     if "profile" not in st.session_state.results:
         with st.spinner("正在加载候选人画像…"):
             resp = api_get("/api/profile", timeout=60)
             if resp is not None:
-                save_result("profile", resp.get("profile"))
+                # 画像属于输入数据而非分析结果，不写入历史记录
+                st.session_state.results["profile"] = resp.get("profile")
 
-    if "profile" in st.session_state.results:
-        render_content("候选人画像", st.session_state.results["profile"], "profile")
+    edited = st.text_area(
+        "简历内容（修改后点击保存即可生效）",
+        value=st.session_state.results.get("profile") or "",
+        height=300,
+        key="profile_editor",
+    )
+
+    col_save, col_reload = st.columns([1, 5])
+    with col_save:
+        if st.button("💾 保存", type="primary"):
+            if not edited.strip():
+                st.warning("内容为空，未保存")
+            else:
+                with st.spinner("正在保存…"):
+                    saved = api_post("/api/profile", {"content": edited})
+                if saved:
+                    st.success(f"已保存 {saved.get('chars')} 字到 `{saved.get('path')}`")
+                    st.session_state.results["profile"] = edited
+    with col_reload:
+        if st.button("🔄 重新加载"):
+            st.session_state.results.pop("profile", None)
+            st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -358,15 +490,15 @@ def page_gap_analysis() -> None:
     """粘贴 JD 做岗位匹配度（Gap）分析。"""
     st.header("📊 岗位匹配度分析")
 
-    if st.button("📋 填入示例 JD"):
-        st.session_state["jd_text"] = SAMPLE_JD
-
-    jd_text = st.text_area(
-        "职位描述（JD）",
-        key="jd_text",
-        height=240,
-        placeholder="粘贴目标岗位的 JD 文本，越详细分析越准确…",
-    )
+    jd_text = get_shared_jd()
+    if jd_text.strip():
+        with st.expander(f"📋 当前使用的 JD（{len(jd_text)} 字，来自侧边栏）", expanded=False):
+            st.text(jd_text)
+    else:
+        st.info("尚未填写 JD。请在左侧「职位描述 JD（全局共享）」粘贴，或点击下方按钮载入示例。")
+        if st.button("📄 填入示例 JD"):
+            st.session_state.shared_jd = SAMPLE_JD
+            st.rerun()
 
     if st.button("🚀 开始匹配度分析", type="primary"):
         if not jd_text.strip():
@@ -403,11 +535,11 @@ def _render_stage_page(
     st.header(f"{icon} {title}")
     st.caption(f"目标岗位：{st.session_state.target_role}｜城市：{st.session_state.target_city}")
 
-    jd_text = st.text_area(
-        "职位描述（可选，填写后分析更精准）",
-        key=f"jd_{result_key}",
-        height=160,
-    )
+    jd_text = get_shared_jd()
+    if jd_text.strip():
+        st.caption(f"📋 已使用侧边栏共享 JD（{len(jd_text)} 字）")
+    else:
+        st.caption("ℹ️ 未填写 JD，将仅依据「目标岗位」生成；在侧边栏填写 JD 结果更精准")
 
     if st.button(f"🚀 生成{title}", type="primary"):
         with st.spinner(spinner_text):
@@ -467,12 +599,13 @@ def page_workflow() -> None:
     st.header("🚀 端到端求职工作流")
     st.caption("岗位发现 → 调研 → 匹配度 → 面试准备 → 简历优化 → 求职信")
 
-    jd_text = st.text_area(
-        "职位描述（可选）",
-        key="jd_workflow",
-        height=150,
-        help="填写后可跳过岗位发现/调研阶段，直接进入匹配度分析",
-    )
+    jd_text = get_shared_jd()
+    if jd_text.strip():
+        st.caption(
+            f"📋 已使用侧边栏共享 JD（{len(jd_text)} 字），将跳过发现/调研直接做匹配度分析"
+        )
+    else:
+        st.caption("ℹ️ 未填写 JD，将执行完整的「岗位发现 → 调研 → 匹配度」链路")
 
     if st.button("🚀 运行完整工作流", type="primary"):
         with st.spinner("工作流执行中（含多次 LLM 调用，可能需要数分钟）…"):
@@ -538,6 +671,8 @@ def page_deep_research() -> None:
             stream_box = st.empty()
             accumulated = ""
             final_answer = ""
+            last_render = 0.0
+            render_interval = 0.2  # 每 200ms 最多重渲染一次，避免长报告越跑越卡
 
             for event in stream_research(payload):
                 etype = event.get("type")
@@ -554,7 +689,14 @@ def page_deep_research() -> None:
                 chunk = _as_text(event.get("content") or "")
                 if chunk:
                     accumulated += chunk
-                    stream_box.markdown(accumulated)
+                    now = time.monotonic()
+                    if now - last_render >= render_interval:
+                        stream_box.markdown(accumulated)
+                        last_render = now
+
+            # 补齐最后一次未触发的渲染
+            if accumulated:
+                stream_box.markdown(accumulated)
 
             stream_box.empty()
             node_hint.empty()
@@ -566,6 +708,49 @@ def page_deep_research() -> None:
         render_content("最终研究报告", st.session_state.results["research"], "深度研究报告")
         with st.expander("🪵 查看流式执行过程", expanded=False):
             st.text(st.session_state.results.get("research_process", ""))
+
+
+# --------------------------------------------------------------------------- #
+# 页面：历史记录
+# --------------------------------------------------------------------------- #
+@page("📚 历史记录")
+def page_history() -> None:
+    """查看本地持久化保存的历史分析结果。"""
+    st.header("📚 历史记录")
+    st.caption(f"每次生成结果都会自动保存到 `{HISTORY_DIR}/`，刷新或重启前端后仍可回看")
+
+    files = list_history()
+    if not files:
+        st.info("暂无历史记录。运行任意分析（匹配度 / 面试 / 简历 / 工作流 / 深度研究）后会自动保存。")
+        return
+
+    selected = st.selectbox(
+        f"共 {len(files)} 条记录（最近在前）",
+        options=files,
+        format_func=lambda p: p.name,
+    )
+
+    if selected is not None:
+        content = selected.read_text(encoding="utf-8", errors="ignore")
+        st.subheader(selected.stem)
+        st.markdown(content)
+        st.download_button(
+            "⬇️ 下载该记录",
+            data=content,
+            file_name=selected.name,
+            mime="text/markdown",
+        )
+
+    st.markdown("---")
+    if st.checkbox("我确认要清空全部历史记录"):
+        if st.button("🗑️ 清空历史记录", type="primary"):
+            try:
+                for f in files:
+                    f.unlink()
+                st.success(f"已清空 {len(files)} 条记录")
+                st.rerun()
+            except OSError as e:
+                st.error(f"清空失败：{e}")
 
 
 # --------------------------------------------------------------------------- #

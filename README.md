@@ -372,6 +372,8 @@ python -m open_deep_research.api
 | POST | `/api/research` | 运行深度研究图，返回完整消息与最终答案 |
 | POST | `/api/research/stream` | **SSE 流式**返回研究过程（LLM token / 工具调用） |
 | GET | `/api/profile` | 读取候选人背景画像（简历或 `CareerConfig.user_profile`） |
+| POST | `/api/profile` | 保存背景资料文本（JSON：`{"content": "..."}`，覆盖 `resume_path`） |
+| POST | `/api/profile/upload` | **上传简历文件**（`multipart/form-data`），支持 `.md/.txt/.pdf`，解析后覆盖保存 |
 | POST | `/api/career/gap-analysis` | 针对具体 JD 的匹配度分析 |
 | POST | `/api/career/discover-jobs` | 岗位发现：推荐岗位方向与公司类型 |
 | POST | `/api/career/interview` | 面试准备清单 |
@@ -438,7 +440,24 @@ streamlit run streamlit_app.py
 - **Bearer Token**：仅当后端设置了 `API_BEARER_TOKEN` 时需要填写；
 - **会话 `thread_id`**：相同 ID 可跨请求复用多轮记忆（依赖后端 checkpointer）；
 - **目标岗位 / 目标城市**：各求职页签共用；
+- **职位描述 JD（全局共享）**：填写一次，匹配度 / 面试 / 简历 / 求职信 / 工作流页签共用，无需重复粘贴；
 - **高级配置 `configurable`**：以 JSON 覆盖 `Configuration` 配置项，如 `{"search_api": "tavily"}`。
+
+### 简历管理（上传 / 在线编辑）
+
+在「🏠 服务与画像」页签中管理背景资料：
+
+- **上传文件**：点击「选择简历文件」从本机选取 `.md` / `.txt` / `.pdf`，再点「上传到服务器并生效」。
+  文件由**后端**解析并写入配置的简历文件（默认 `data/简历.md`），因此**后端部署在远程服务器或容器里时同样生效**。
+- **在线编辑**：在文本框内直接修改简历内容，点「💾 保存」写入后端。
+
+> 简历是「匹配度分析 / 面试准备 / 简历优化 / 端到端工作流」的共同输入，填写后这些功能的输出才会贴合你的真实背景。
+>
+> 上传大小默认上限 5 MB，可用后端环境变量 `API_UPLOAD_MAX_MB` 调整；PDF 解析依赖 `pymupdf`。
+
+### 历史记录
+
+每次生成的结果会自动保存到前端所在机器的 `data/history/`，在「📚 历史记录」页签可回看、下载或清空；刷新浏览器或重启前端都不会丢失。
 
 > - 每份结果都支持**一键下载 Markdown**，便于带走使用。
 > - 前端只负责展示与调用，**真正的能力由后端 API 提供**，因此使用前必须先启动后端服务；深度研究与端到端工作流涉及多次 LLM 调用，耗时较长，请耐心等待。
