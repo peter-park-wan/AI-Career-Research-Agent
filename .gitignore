@@ -71,6 +71,8 @@ temp/
 # 本地数据（含个人隐私，勿提交）：简历档案与历史分析结果
 data/profiles/
 data/history/
+# 当前生效的简历（每人不同，含手机号/邮箱等个人信息）
+data/简历.md
 data/*.pdf
 data/*.doc
 data/*.docx
