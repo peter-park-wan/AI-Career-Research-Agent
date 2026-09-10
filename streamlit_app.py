@@ -73,6 +73,7 @@ def init_session_state() -> None:
         "target_role": "AI工程师",
         "target_city": "北京",
         "configurable_json": "",
+        "profile_name": "",  # 当前查看 / 编辑的简历档案名
         "results": {},  # key -> 各阶段结果，切换页面不丢失
     }
     for key, value in defaults.items():
@@ -150,6 +151,21 @@ def api_post(path: str, payload: Dict[str, Any], timeout: int = 1800):
     return resp.json()
 
 
+def api_delete(path: str, params: Optional[Dict[str, Any]] = None, timeout: int = 20):
+    """调用 DELETE 接口，成功返回 dict，失败显示错误并返回 None。"""
+    try:
+        resp = requests.delete(
+            f"{_base_url()}{path}", headers=_headers(), params=params, timeout=timeout
+        )
+    except requests.RequestException as e:
+        st.error(f"无法连接后端服务（{_base_url()}{path}）：{e}")
+        return None
+    if resp.status_code != 200:
+        st.error(f"请求失败（HTTP {resp.status_code}）：{_safe_detail(resp)}")
+        return None
+    return resp.json()
+
+
 def _safe_detail(resp: requests.Response) -> str:
     """尽量从错误响应中取出可读的 detail 字段。"""
     try:
@@ -191,10 +207,11 @@ def stream_research(payload: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
             continue
 
 
-def upload_resume(uploaded) -> Optional[Dict[str, Any]]:
+def upload_resume(uploaded, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """把用户选择的文件上传到后端 ``/api/profile/upload``。
 
     走后端写入而不是前端直接落盘，这样后端部署在远程服务器或容器里时同样生效。
+    指定 ``name`` 时保存到对应档案，否则写入当前生效的简历文件。
     """
     try:
         files = {
@@ -215,6 +232,7 @@ def upload_resume(uploaded) -> Optional[Dict[str, Any]]:
             f"{_base_url()}/api/profile/upload",
             headers=headers,
             files=files,
+            params={"name": name} if name else None,
             timeout=(10, 120),
         )
     except requests.RequestException as e:
@@ -402,12 +420,93 @@ def page_overview() -> None:
 
     st.markdown("---")
 
+    # ---------------------------- 档案切换 ---------------------------- #
+    st.subheader("📁 简历档案（多人共用一台设备时切换）")
+    info = api_get("/api/profile/names", timeout=20) or {}
+    all_names: list[str] = list(info.get("names") or [])
+    active_name = info.get("active")
+
+    # 当前查看的档案：优先激活档案，其次第一个档案；若已被删除则自动纠正
+    if st.session_state.profile_name not in all_names:
+        st.session_state.profile_name = active_name or (all_names[0] if all_names else "")
+
+    if all_names:
+        col_sel, col_act = st.columns([3, 1])
+        with col_sel:
+            st.selectbox(
+                "选择档案（查看 / 编辑 / 上传）",
+                options=all_names,
+                key="profile_name",
+            )
+        with col_act:
+            st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+            if st.button("✅ 切换使用", type="primary"):
+                with st.spinner("正在切换…"):
+                    res = api_post(
+                        "/api/profile/activate", {"name": st.session_state.profile_name}
+                    )
+                if res:
+                    st.success(
+                        f"已切换到「{st.session_state.profile_name}」，"
+                        "匹配度分析 / 面试 / 简历优化 / 工作流将全部基于该简历"
+                    )
+                    st.session_state.results.pop("profile_cache", None)
+                    st.rerun()
+        if active_name:
+            st.caption(f"当前生效：**{active_name}**")
+        else:
+            st.caption("当前生效：尚未切换档案（沿用简历文件的现有内容）")
+    else:
+        st.info("暂无档案。请在下方「新建档案」中创建，或直接上传简历文件。")
+
+    with st.expander("➕ 新建档案 / 🗑️ 删除档案", expanded=False):
+        new_name = st.text_input("新档案名（如：张三、万涵）", key="new_profile_name")
+        if st.button("➕ 创建档案"):
+            if not new_name.strip():
+                st.warning("请输入档案名")
+            else:
+                cleaned = new_name.strip()
+                with st.spinner("正在创建…"):
+                    res = api_post(
+                        "/api/profile",
+                        {
+                            "content": f"# {cleaned} 的简历\n\n（请填写内容，或直接上传简历文件）",
+                            "name": cleaned,
+                        },
+                    )
+                if res:
+                    st.success(f"已创建档案「{cleaned}」，上传或编辑后可点「切换使用」")
+                    st.session_state.profile_name = cleaned
+                    st.session_state.results.pop("profile_cache", None)
+                    st.rerun()
+
+        if all_names:
+            st.markdown("---")
+            del_name = st.selectbox(
+                "选择要删除的档案", options=all_names, key="del_profile_name"
+            )
+            if st.button("🗑️ 删除该档案"):
+                if del_name == active_name:
+                    st.error("不能删除正在使用的档案，请先切换到其他档案")
+                else:
+                    with st.spinner("正在删除…"):
+                        res = api_delete("/api/profile", {"name": del_name})
+                    if res:
+                        st.success(f"已删除档案「{del_name}」")
+                        st.session_state.results.pop("profile_cache", None)
+                        st.rerun()
+
     # ---------------------------- 简历上传 ---------------------------- #
     st.subheader("📤 上传简历")
-    st.caption(
-        "支持 .md / .txt / .pdf。上传后由后端解析并覆盖保存，"
-        "「匹配度分析 / 面试准备 / 简历优化 / 工作流」都会基于它计算"
-    )
+    target = st.session_state.get("profile_name") or ""
+    if target:
+        st.caption(
+            f"支持 .md / .txt / .pdf，将上传到档案 **{target}**；"
+            "上传后点「✅ 切换使用」即可对全部功能生效"
+        )
+    else:
+        st.caption("支持 .md / .txt / .pdf，将直接写入当前生效的简历文件")
+
     uploaded = st.file_uploader(
         "选择简历文件",
         type=["md", "markdown", "txt", "pdf"],
@@ -416,9 +515,9 @@ def page_overview() -> None:
     )
     if uploaded is not None:
         st.info(f"已选择：**{uploaded.name}**（{uploaded.size / 1024:.1f} KB）")
-        if st.button("⬆️ 上传到服务器并生效", type="primary"):
+        if st.button("⬆️ 上传并保存", type="primary"):
             with st.spinner("正在上传并解析…"):
-                result = upload_resume(uploaded)
+                result = upload_resume(uploaded, target or None)
             if result:
                 st.success(
                     f"上传成功：共 {result.get('chars')} 字，已保存到 `{result.get('path')}`"
@@ -427,23 +526,28 @@ def page_overview() -> None:
                 if preview:
                     with st.expander("👀 内容预览", expanded=False):
                         st.text(preview)
-                st.session_state.results.pop("profile", None)
+                st.session_state.results.pop("profile_cache", None)
                 st.rerun()
 
     # ---------------------------- 在线编辑 ---------------------------- #
     st.subheader("✏️ 在线编辑简历")
-    if "profile" not in st.session_state.results:
-        with st.spinner("正在加载候选人画像…"):
-            resp = api_get("/api/profile", timeout=60)
+    cache_key = f"profile_cache::{target}"
+    if cache_key not in st.session_state.results:
+        with st.spinner("正在加载简历内容…"):
+            resp = api_get(
+                "/api/profile",
+                params={"name": target} if target else None,
+                timeout=60,
+            )
             if resp is not None:
-                # 画像属于输入数据而非分析结果，不写入历史记录
-                st.session_state.results["profile"] = resp.get("profile")
+                # 简历属于输入数据而非分析结果，不写入历史记录
+                st.session_state.results[cache_key] = resp.get("profile")
 
     edited = st.text_area(
-        "简历内容（修改后点击保存即可生效）",
-        value=st.session_state.results.get("profile") or "",
+        f"简历内容（{target or '当前生效文件'}）",
+        value=st.session_state.results.get(cache_key) or "",
         height=300,
-        key="profile_editor",
+        key=f"profile_editor::{target}",
     )
 
     col_save, col_reload = st.columns([1, 5])
@@ -453,13 +557,16 @@ def page_overview() -> None:
                 st.warning("内容为空，未保存")
             else:
                 with st.spinner("正在保存…"):
-                    saved = api_post("/api/profile", {"content": edited})
+                    saved = api_post(
+                        "/api/profile",
+                        {"content": edited, "name": target or None},
+                    )
                 if saved:
                     st.success(f"已保存 {saved.get('chars')} 字到 `{saved.get('path')}`")
-                    st.session_state.results["profile"] = edited
+                    st.session_state.results[cache_key] = edited
     with col_reload:
         if st.button("🔄 重新加载"):
-            st.session_state.results.pop("profile", None)
+            st.session_state.results.pop(cache_key, None)
             st.rerun()
 
 

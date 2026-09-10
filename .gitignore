@@ -67,3 +67,10 @@ tmp/
 temp/
 
 .langgraph_api
+
+# 本地数据（含个人隐私，勿提交）：简历档案与历史分析结果
+data/profiles/
+data/history/
+data/*.pdf
+data/*.doc
+data/*.docx

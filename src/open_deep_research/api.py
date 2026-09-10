@@ -155,6 +155,9 @@ class CareerStageRequest(BaseModel):
 
 class ProfileTextRequest(BaseModel):
     content: str = Field(..., description="简历 / 背景资料全文（Markdown 或纯文本）")
+    name: Optional[str] = Field(
+        default=None, description="档案名；为空则写入当前生效的简历文件"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -574,21 +577,42 @@ async def research_stream(body: ResearchRequest):
 # 2. 求职场景单点能力
 # --------------------------------------------------------------------------- #
 @app.get("/api/profile", dependencies=[Depends(require_token)], tags=["career"])
-async def get_profile(configurable: Optional[str] = None):
-    """读取候选人背景画像（简历文件或 CareerConfig.user_profile）。"""
+async def get_profile(configurable: Optional[str] = None, name: Optional[str] = None):
+    """读取候选人背景画像。
+
+    指定 ``name`` 时读取对应档案的内容；否则读取当前生效的简历
+    （``resume_path`` 指向的文件，即最近一次激活的档案）。
+    """
+    if name:
+        name = _safe_profile_name(name)
+        path = _profile_file(name)
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail=f"档案不存在：{name}")
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return {"profile": f.read(), "name": name}
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"读取档案失败：{e}")
+
     from open_deep_research.profile import load_user_profile
 
     cfg = build_runnable_config(
         json.loads(configurable) if configurable else None, None
     )
-    return {"profile": load_user_profile(cfg)}
+    return {"profile": load_user_profile(cfg), "name": _read_active_name()}
 
 
 # --------------------------------------------------------------------------- #
 # 简历 / 背景资料写入（供 Web 界面上传与在线编辑使用）
+#
+# 支持多档案：档案存放在 data/profiles/<名字>.md，「切换到某档案」即把该档案内容
+# 写入 resume_path（默认 data/简历.md）。后端所有求职功能都从 resume_path 读取，
+# 因此切换后全部功能立即生效，调用方无需感知档案机制。
 # --------------------------------------------------------------------------- #
 _UPLOAD_MAX_BYTES = int(os.getenv("API_UPLOAD_MAX_MB", "5")) * 1024 * 1024
 _UPLOAD_ALLOWED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf"}
+_PROFILE_DIR = os.getenv("API_PROFILE_DIR", "data/profiles")
+_ACTIVE_MARK = ".active"
 
 
 def _resolve_resume_path() -> str:
@@ -633,9 +657,60 @@ def _extract_text(filename: str, raw: bytes) -> str:
     return raw.decode("utf-8", errors="ignore")
 
 
-def _write_resume(text: str) -> Dict[str, Any]:
-    """把背景资料文本写入 resume_path，返回保存结果。"""
-    path = _resolve_resume_path()
+def _safe_profile_name(name: str) -> str:
+    """校验档案名：禁止路径穿越与隐藏文件，返回规范化后的名字。"""
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="档案名不能为空")
+    if cleaned in (".", "..") or cleaned.startswith("."):
+        raise HTTPException(status_code=400, detail=f"非法档案名：{name}")
+    if "/" in cleaned or "\\" in cleaned or os.path.basename(cleaned) != cleaned:
+        raise HTTPException(status_code=400, detail=f"档案名不能包含路径分隔符：{name}")
+    return cleaned
+
+
+def _profile_file(name: str) -> str:
+    """返回指定档案的文件路径。"""
+    return os.path.join(_PROFILE_DIR, f"{_safe_profile_name(name)}.md")
+
+
+def _list_profile_names() -> List[str]:
+    """列出所有档案名（按名称排序）。"""
+    if not os.path.isdir(_PROFILE_DIR):
+        return []
+    return sorted(
+        f[:-3]
+        for f in os.listdir(_PROFILE_DIR)
+        if f.endswith(".md") and os.path.isfile(os.path.join(_PROFILE_DIR, f))
+    )
+
+
+def _read_active_name() -> Optional[str]:
+    """读取当前激活的档案名；未设置则返回 None。"""
+    path = os.path.join(_PROFILE_DIR, _ACTIVE_MARK)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _set_active_name(name: Optional[str]) -> None:
+    """记录当前激活的档案名。"""
+    try:
+        os.makedirs(_PROFILE_DIR, exist_ok=True)
+        with open(
+            os.path.join(_PROFILE_DIR, _ACTIVE_MARK), "w", encoding="utf-8"
+        ) as f:
+            f.write(name or "")
+    except OSError as e:
+        logger.warning("写入激活标记失败：%s", e)
+
+
+def _write_text(path: str, text: str) -> None:
+    """把文本写入指定路径（自动创建父目录）。"""
     try:
         directory = os.path.dirname(path) or "."
         os.makedirs(directory, exist_ok=True)
@@ -643,12 +718,38 @@ def _write_resume(text: str) -> Dict[str, Any]:
             f.write(text)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"保存失败：{e}")
+
+
+def _save_profile_text(text: str, name: Optional[str]) -> Dict[str, Any]:
+    """保存简历文本。
+
+    指定 ``name`` 时保存到对应档案（不存在则创建）；若该档案正是当前激活档案，
+    则同步写入 resume_path，保证「编辑后对全部功能立即生效」。
+    """
+    if name:
+        name = _safe_profile_name(name)
+        path = _profile_file(name)
+        _write_text(path, text)
+        if name == _read_active_name():
+            _write_text(_resolve_resume_path(), text)
+        return {"status": "ok", "name": name, "path": path, "chars": len(text)}
+
+    path = _resolve_resume_path()
+    _write_text(path, text)
     return {"status": "ok", "path": path, "chars": len(text)}
+
+
+@app.get(
+    "/api/profile/names", dependencies=[Depends(require_token)], tags=["career"]
+)
+async def list_profiles():
+    """列出所有简历档案名，以及当前激活（生效中）的档案。"""
+    return {"names": _list_profile_names(), "active": _read_active_name()}
 
 
 @app.post("/api/profile", dependencies=[Depends(require_token)], tags=["career"])
 async def save_profile(body: ProfileTextRequest):
-    """保存候选人背景资料文本（覆盖 resume_path 指向的文件）。"""
+    """保存候选人背景资料文本；指定 name 时保存到对应档案（不存在则创建）。"""
     content = body.content or ""
     if not content.strip():
         raise HTTPException(status_code=400, detail="内容为空，未保存")
@@ -657,14 +758,14 @@ async def save_profile(body: ProfileTextRequest):
             status_code=413,
             detail=f"内容过大，上限 {_UPLOAD_MAX_BYTES // 1024 // 1024} MB",
         )
-    return _write_resume(content)
+    return _save_profile_text(content, body.name)
 
 
 @app.post(
     "/api/profile/upload", dependencies=[Depends(require_token)], tags=["career"]
 )
-async def upload_profile(file: UploadFile = File(...)):
-    """上传简历文件（.md/.txt/.pdf），解析后覆盖保存到 resume_path。"""
+async def upload_profile(file: UploadFile = File(...), name: Optional[str] = None):
+    """上传简历文件（.md/.txt/.pdf）；指定 name 时保存到对应档案。"""
     filename = file.filename or ""
     suffix = os.path.splitext(filename)[1].lower()
     if suffix not in _UPLOAD_ALLOWED_SUFFIXES:
@@ -689,10 +790,54 @@ async def upload_profile(file: UploadFile = File(...)):
     if not text.strip():
         raise HTTPException(status_code=400, detail="未能从文件中提取到文本内容")
 
-    result = _write_resume(text)
+    result = _save_profile_text(text, name)
     result["filename"] = filename
     result["preview"] = text[:300]
     return result
+
+
+class ProfileActivateRequest(BaseModel):
+    name: str = Field(..., description="要切换到的档案名")
+
+
+@app.post(
+    "/api/profile/activate", dependencies=[Depends(require_token)], tags=["career"]
+)
+async def activate_profile(body: ProfileActivateRequest):
+    """切换当前生效的简历档案：把档案内容写入 resume_path，全部求职功能立即生效。"""
+    name = _safe_profile_name(body.name)
+    path = _profile_file(name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"档案不存在：{name}")
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"读取档案失败：{e}")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail=f"档案内容为空，无法切换：{name}")
+
+    _write_text(_resolve_resume_path(), text)
+    _set_active_name(name)
+    return {"status": "ok", "active": name, "chars": len(text)}
+
+
+@app.delete("/api/profile", dependencies=[Depends(require_token)], tags=["career"])
+async def delete_profile(name: str):
+    """删除指定简历档案；不允许删除当前激活档案。"""
+    name = _safe_profile_name(name)
+    if name == _read_active_name():
+        raise HTTPException(
+            status_code=400, detail="不能删除正在使用的档案，请先切换到其他档案"
+        )
+    path = _profile_file(name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"档案不存在：{name}")
+    try:
+        os.remove(path)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}")
+    return {"status": "ok", "deleted": name}
 
 
 @app.post(

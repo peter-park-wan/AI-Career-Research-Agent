@@ -371,9 +371,12 @@ python -m open_deep_research.api
 | GET | `/health` | 健康检查 |
 | POST | `/api/research` | 运行深度研究图，返回完整消息与最终答案 |
 | POST | `/api/research/stream` | **SSE 流式**返回研究过程（LLM token / 工具调用） |
-| GET | `/api/profile` | 读取候选人背景画像（简历或 `CareerConfig.user_profile`） |
-| POST | `/api/profile` | 保存背景资料文本（JSON：`{"content": "..."}`，覆盖 `resume_path`） |
-| POST | `/api/profile/upload` | **上传简历文件**（`multipart/form-data`），支持 `.md/.txt/.pdf`，解析后覆盖保存 |
+| GET | `/api/profile` | 读取候选人背景画像；`?name=X` 读取指定档案 |
+| GET | `/api/profile/names` | 列出所有简历档案名与当前激活（生效中）的档案 |
+| POST | `/api/profile` | 保存背景资料文本（JSON：`{"content": "...", "name": "档案名"}`）；`name` 为空则写入当前生效文件 |
+| POST | `/api/profile/upload` | **上传简历文件**（`multipart/form-data`），支持 `.md/.txt/.pdf`；`?name=X` 保存到指定档案 |
+| POST | `/api/profile/activate` | **切换生效档案**：把该档案内容写入 `resume_path`，全部求职功能立即基于它 |
+| DELETE | `/api/profile?name=X` | 删除指定档案（不允许删除当前激活档案） |
 | POST | `/api/career/gap-analysis` | 针对具体 JD 的匹配度分析 |
 | POST | `/api/career/discover-jobs` | 岗位发现：推荐岗位方向与公司类型 |
 | POST | `/api/career/interview` | 面试准备清单 |
@@ -443,17 +446,31 @@ streamlit run streamlit_app.py
 - **职位描述 JD（全局共享）**：填写一次，匹配度 / 面试 / 简历 / 求职信 / 工作流页签共用，无需重复粘贴；
 - **高级配置 `configurable`**：以 JSON 覆盖 `Configuration` 配置项，如 `{"search_api": "tavily"}`。
 
-### 简历管理（上传 / 在线编辑）
+### 简历档案管理（多人共用一台设备）
 
-在「🏠 服务与画像」页签中管理背景资料：
+多人共用同一台电脑/同一套服务时，每人可以拥有独立的简历档案，随时切换，互不干扰。
 
-- **上传文件**：点击「选择简历文件」从本机选取 `.md` / `.txt` / `.pdf`，再点「上传到服务器并生效」。
-  文件由**后端**解析并写入配置的简历文件（默认 `data/简历.md`），因此**后端部署在远程服务器或容器里时同样生效**。
-- **在线编辑**：在文本框内直接修改简历内容，点「💾 保存」写入后端。
+在「🏠 服务与画像」页签：
 
-> 简历是「匹配度分析 / 面试准备 / 简历优化 / 端到端工作流」的共同输入，填写后这些功能的输出才会贴合你的真实背景。
+1. **新建档案**：展开「➕ 新建档案 / 🗑️ 删除档案」，输入名字（如「张三」「万涵」）后创建。
+   也可直接用「📤 上传简历」上传到某个档案——上传时选择的目标档案不存在会自动创建。
+2. **切换使用**：在「选择档案」下拉中选中自己的档案，点「✅ 切换使用」。
+   切换会**立即对全部功能生效**（匹配度分析 / 面试准备 / 简历优化 / 求职信 / 端到端工作流都会改为基于该简历）。
+3. **编辑与上传**：均针对当前选中的档案；若编辑的正是已激活档案，会同步写入生效文件，无需再切换。
+4. **删除档案**：不能删除当前激活的档案，需先切换到其他档案。
+
+实现机制（便于二次开发）：
+
+- 档案存放在 `data/profiles/<名字>.md`；当前激活的档案名记录在 `data/profiles/.active`。
+- 「切换」即把该档案内容写入 `resume_path`（默认 `data/简历.md`）——后端所有求职功能都从这里读取，
+  因此切换后无需改动任何调用方，全部能力立即基于新简历。
+- 可用环境变量 `API_PROFILE_DIR` 调整档案目录。
+
+> 简历是「匹配度分析 / 面试准备 / 简历优化 / 端到端工作流」的共同输入，选对档案后输出才会贴合对应人的真实背景。
 >
-> 上传大小默认上限 5 MB，可用后端环境变量 `API_UPLOAD_MAX_MB` 调整；PDF 解析依赖 `pymupdf`。
+> 上传大小默认上限 5 MB（`API_UPLOAD_MAX_MB` 调整）；PDF 解析依赖 `pymupdf`。
+>
+> 档案目录 `data/profiles/` 已在 `.gitignore` 中忽略，避免把含手机号、邮箱的真实简历提交到仓库。
 
 ### 历史记录
 
