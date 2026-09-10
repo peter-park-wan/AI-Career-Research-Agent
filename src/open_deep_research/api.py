@@ -27,6 +27,24 @@ import uuid
 from collections import OrderedDict
 from contextlib import nullcontext as _nullcontext
 
+# 加载 .env：`langgraph dev` 会自动加载，但 `uvicorn` 直接启动不会，
+# 这里显式加载一次，保证两种启动方式下 API Key 等行为一致。
+# load_dotenv 默认不覆盖已经存在的环境变量。
+try:
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    load_dotenv()  # 1) 当前工作目录下的 .env
+    # 2) uvicorn 启动时 CWD 可能不是项目根，再按包位置向上定位一次
+    for base in Path(__file__).resolve().parents[:4]:
+        candidate = base / ".env"
+        if candidate.is_file():
+            load_dotenv(candidate)
+            break
+except ImportError:  # pragma: no cover - python-dotenv 缺失时忽略
+    pass
+
 logger = logging.getLogger(__name__)
 from typing import Any, AsyncIterator, Dict, List, Optional
 
