@@ -17,8 +17,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
 # Import the report generation agents
-from legacy.graph import builder
-from legacy.multi_agent import supervisor_builder
+# 注意：必须是带 ``src.`` 的完整包路径。写成 ``from legacy.graph import ...`` 时，
+# Python 会匹配到 site-packages 里同名的第三方 ``legacy.py`` 模块（不是包），
+# 报 ``ModuleNotFoundError: 'legacy' is not a package``，并让整个 pytest 收集阶段中断。
+from src.legacy.graph import builder
+from src.legacy.multi_agent import supervisor_builder
 
 # Initialize rich console with force_terminal to ensure output even when pytest captures stdout
 console = Console(force_terminal=True, width=120)

@@ -8,10 +8,17 @@ services:
     ports:
       - "2024:2024"   # langgraph dev / Studio 界面端口
     environment:
-      # LLM 提供方 API Key（演示真实调用时填写；不填则仅能启动、接口会报缺 Key）
+      # 注意：这是「白名单」——只有列在这里的变量才会被注入容器。
+      # 宿主机 .env 里填了但没列在这里的，容器内 os.getenv() 一律拿到空值
+      # （Dockerfile 不 COPY .env，compose 也只挂了 ./data，容器里没有这个文件）。
+      # LLM 提供方 API Key（不填则仅能启动，调用时报缺 Key）
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # 项目当前的默认组合：DeepSeek 模型 + Tavily 搜索。
+      # 这两个不注入，默认配置下研究直接跑不起来（模型缺 Key / 搜索缺 Key）。
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       # langgraph dev 端口
       - LANGGRAPH_PORT=2024
     volumes:

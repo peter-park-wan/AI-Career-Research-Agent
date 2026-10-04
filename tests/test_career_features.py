@@ -76,11 +76,23 @@ def test_load_user_profile_resume_file():
         os.unlink(path)
 
 
-def test_load_user_profile_no_career_config():
+def test_load_user_profile_no_career_config(tmp_path, monkeypatch):
+    """未配置 career_config 时回退到默认简历路径 ``./data/简历.md``。
+
+    这里显式隔离工作目录：默认路径是相对进程 cwd 的 ``./data/简历.md``，
+    原实现假设该文件"必然不存在"，于是开发者一旦按文档把简历放好，
+    这个测试就会误报失败（测试结论依赖本机环境而不是代码行为）。
+    """
+    monkeypatch.chdir(tmp_path)
+    # 默认路径不存在 → 继续回退到长期记忆 → 空串
     assert profile.load_user_profile({}) == ""
-    assert (
-        profile.load_user_profile({"configurable": {}}) == ""
-    )
+    assert profile.load_user_profile({"configurable": {}}) == ""
+
+    # 按既定约定：把简历放到默认路径即自动生效
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "简历.md").write_text("默认路径简历", encoding="utf-8")
+    assert profile.load_user_profile({}) == "默认路径简历"
 
 
 def test_load_user_profile_missing_file_falls_back_to_empty():
@@ -278,7 +290,7 @@ def test_rag_store_build_routes_to_supabase_requires_connection():
 # --------------------------------------------------------------------------- #
 # 7. End-to-end Chroma retrieval (skipped if deps absent)
 # --------------------------------------------------------------------------- #
-def test_rag_store_build_and_retrieve_chroma():
+def test_rag_store_build_and_retrieve_chroma(tmp_path):
     pytest.importorskip("langchain_chroma")
     from langchain_core.documents import Document
 
@@ -299,27 +311,31 @@ def test_rag_store_build_and_retrieve_chroma():
         def embed_query(self, text):
             return self._vec(text)
 
-    with tempfile.TemporaryDirectory() as d:
-        store = rag.RAGStore(
-            embedding_model=_HashEmbeddings(),
-            index_path=d,
-            collection="test_career_kb",
-            top_k=4,
-            vector_store="chroma",
-        )
-        store.build(
-            [
-                Document(
-                    page_content="字节跳动 AI 工程师 JD 要求 Python 与 RAG。",
-                    metadata={"source": "字节跳动_JD.md"},
-                ),
-                Document(
-                    page_content="我的简历：3 年 Python 后端，做过 RAG 项目。",
-                    metadata={"source": "简历.md"},
-                ),
-            ]
-        )
-        out = store.retrieve("字节跳动 AI 工程师 要求", k=4)
+    # 用 pytest 的 tmp_path，而不是 tempfile.TemporaryDirectory()：
+    # Chroma 会一直握着索引文件（chroma.sqlite3 / data_level0.bin）的句柄，
+    # 在 Windows 上 TemporaryDirectory 退出时 rmtree 会撞 PermissionError
+    # (WinError 32) —— 断言其实已经通过了，失败只发生在清理阶段。
+    # tmp_path 由 pytest 统一管理，清理失败只警告、不判定测试失败。
+    store = rag.RAGStore(
+        embedding_model=_HashEmbeddings(),
+        index_path=str(tmp_path),
+        collection="test_career_kb",
+        top_k=4,
+        vector_store="chroma",
+    )
+    store.build(
+        [
+            Document(
+                page_content="字节跳动 AI 工程师 JD 要求 Python 与 RAG。",
+                metadata={"source": "字节跳动_JD.md"},
+            ),
+            Document(
+                page_content="我的简历：3 年 Python 后端，做过 RAG 项目。",
+                metadata={"source": "简历.md"},
+            ),
+        ]
+    )
+    out = store.retrieve("字节跳动 AI 工程师 要求", k=4)
 
     assert "字节跳动_JD.md" in out
     assert "简历.md" in out

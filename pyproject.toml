@@ -75,7 +75,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest", "httpx>=0.24.0"]
-api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.30.0", "python-multipart>=0.0.9"]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "pydantic-settings>=2.4.0",
+    "anyio>=4.4.0",
+]
 postgres = ["langgraph-checkpoint-postgres>=1.0.0", "psycopg[binary]>=3.1.0"]
 redis = ["langgraph-checkpoint-redis>=1.0.0"]
 ui = ["streamlit>=1.35.0", "requests>=2.32.3"]
@@ -85,9 +91,20 @@ requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["open_deep_research", "legacy", "tests"]
+packages = [
+    "app",
+    "app.core",
+    "app.repositories",
+    "app.routers",
+    "app.schemas",
+    "app.services",
+    "open_deep_research",
+    "legacy",
+    "tests",
+]
 
 [tool.setuptools.package-dir]
+"app" = "app"
 "open_deep_research" = "src/open_deep_research"
 "legacy" = "src/legacy"
 "tests" = "tests"
@@ -118,3 +135,18 @@ lint.ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+# 默认只收集 tests/。
+#
+# 原因：``src/legacy/tests/test_report_quality.py`` 是上游 open_deep_research 的
+# **LLM 评测脚本**（@pytest.mark.langsmith），它会真实跑一次研究报告生成、
+# 再调一个 LLM 给报告打分。放进默认收集会导致：
+#   1. 每次跑全量测试都消耗真实 token；
+#   2. 缺对应 API Key 时必然失败，污染全量测试结果。
+# 它是"评测"不是"回归测试"，需要时用
+# ``python -m pytest src/legacy/tests/test_report_quality.py`` 显式执行。
+testpaths = ["tests"]
+markers = [
+    "langsmith: 会真实调用 LLM 的评测用例，默认不执行",
+]

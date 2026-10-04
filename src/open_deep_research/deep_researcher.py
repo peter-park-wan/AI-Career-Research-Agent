@@ -368,16 +368,28 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                 update_payload["raw_notes"] = [raw_notes_concat]
                 
         except Exception as e:
-            # Handle research execution errors
-            if is_token_limit_exceeded(e, configurable.research_model) or True:
-                # Token limit exceeded or other error - end research phase
-                return Command(
-                    goto=END,
-                    update={
-                        "notes": get_notes_from_tool_calls(supervisor_messages),
-                        "research_brief": state.get("research_brief", "")
-                    }
+            # 研究子任务整体失败：不能让异常冒泡（否则整张图失败、已经拿到的笔记全丢），
+            # 因此提前结束研究阶段并把已有笔记交出去。
+            # 注意：这里原本写成 `if is_token_limit_exceeded(...) or True:`，
+            # 条件恒为真 ⇒ 任何异常（含代码缺陷、网络故障）都被静默吞掉，
+            # 线上表现为"报告莫名缺内容"且日志里查不到任何线索。
+            # 现在按异常类型分级记录，让 token 超限（预期内）与真实故障可区分。
+            if is_token_limit_exceeded(e, configurable.research_model):
+                logger.warning(
+                    "研究子任务超出模型上下文上限，提前结束研究阶段：%s", e
                 )
+            else:
+                logger.error(
+                    "研究子任务执行失败，提前结束研究阶段（仅保留已有笔记）",
+                    exc_info=e,
+                )
+            return Command(
+                goto=END,
+                update={
+                    "notes": get_notes_from_tool_calls(supervisor_messages),
+                    "research_brief": state.get("research_brief", "")
+                }
+            )
     
     # Step 3: Return command with all tool results
     update_payload["supervisor_messages"] = all_tool_messages
@@ -694,7 +706,7 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     
     while current_retry <= max_retries:
         try:
-            # Create comprehensive prompt with all research context
+            # Create comprehensive prompt with all research context  
             final_report_prompt = final_report_generation_prompt.format(
                 research_brief=state.get("research_brief", ""),
                 messages=get_buffer_string(state.get("messages", [])),

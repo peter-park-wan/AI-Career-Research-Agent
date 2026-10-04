@@ -24,6 +24,9 @@ WORKDIR /app
 # 先复制依赖声明，利用层缓存
 COPY pyproject.toml README.md ./
 COPY src ./src
+# app/ 是分层后的 HTTP 服务实现（routers / services / repositories），
+# pyproject 已将其声明为安装包，镜像内必须一并存在，否则 pip install -e . 会缺包。
+COPY app ./app
 
 # 安装项目（主依赖已含 langgraph-cli[inmem]，api extras 提供 uvicorn/fastapi）
 RUN pip install --upgrade pip \

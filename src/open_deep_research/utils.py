@@ -6,6 +6,7 @@ import os
 import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional
+from urllib.parse import quote
 
 import aiohttp
 from langchain.chat_models import init_chat_model
@@ -936,15 +937,12 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
             return api_keys.get("GOOGLE_API_KEY")
         return None
     else:
-        if model_name.startswith("openai:"):
+        if model_name.startswith("openai:"): 
             return os.getenv("OPENAI_API_KEY")
         elif model_name.startswith("anthropic:"):
             return os.getenv("ANTHROPIC_API_KEY")
         elif model_name.startswith("google"):
             return os.getenv("GOOGLE_API_KEY")
-        elif model_name.startswith("deepseek"):
-            # 模型名形如 "deepseek-chat"（无 provider 前缀），故不带冒号匹配
-            return os.getenv("DEEPSEEK_API_KEY")
         return None
 
 def get_tavily_api_key(config: RunnableConfig):
@@ -1016,7 +1014,13 @@ async def search_github_projects(
     async with aiohttp.ClientSession(headers=headers) as session:
         for query in search_queries[:3]:  # Limit queries to avoid rate limits
             try:
-                url = f"https://api.github.com/search/repositories?q={query}&sort={sort}&order={order}&per_page={min(max_results, 5)}"
+                # query 里含空格（如 "python machine learning"），必须做 URL 编码，
+                # 否则 aiohttp 会因非法 URL 直接抛异常，整个查询静默失败。
+                url = (
+                    "https://api.github.com/search/repositories"
+                    f"?q={quote(query, safe='')}&sort={sort}&order={order}"
+                    f"&per_page={min(max_results, 5)}"
+                )
                 async with session.get(url) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -1127,7 +1131,7 @@ def extract_user_profile_from_messages(messages: list[MessageLikeRepresentation]
         r"(Bachelor|Masters|PhD|Master's)",
         r"(大学|学院|学校)\s*(本科|硕士|博士)",
     ]
-    for pattern in exp_patterns:
+    for pattern in edu_patterns:
         match = re.search(pattern, text)
         if match:
             profile["education"] = match.group(1)
