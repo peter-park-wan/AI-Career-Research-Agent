@@ -1,0 +1,56 @@
+name: CI
+
+# 触发时机：推送到 main、以及所有 PR。
+# PR 触发是关键——它让"红叉"挡在合并按钮之前，而不是合并之后才发现。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支上重复推送时，取消还在跑的旧任务。
+# 否则连续 push 会堆积多个等待中的任务，反馈变慢还白烧 CI 时长。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 与 langgraph.json 声明的版本保持一致：部署用什么版本，CI 就验什么版本。
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        # 只装 api extra，不装 local-embeddings。
+        #
+        # 为什么不装：它会带上 torch（数百 MB），安装耗时长，而测试套件里
+        # **没有任何用例需要真实加载模型**——Chroma 端到端用的是测试内的假
+        # embedding（_HashEmbeddings），本地模型用例只在 sentence-transformers
+        # 缺失时才执行。为不需要的东西付出几分钟 CI 时间不划算。
+        #
+        # 缺的可选依赖（rapidocr、streamlit 等）会让对应用例 importorskip 跳过，
+        # 不会误报失败。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[api]"
+
+      - name: 运行测试
+        # testpaths=tests 已在 pyproject 中配置：默认不收集
+        # src/legacy/tests/test_report_quality.py（那是会真烧 token 的 LLM 评测，
+        # 不是回归测试），这里无需额外过滤。
+        run: pytest -q
+
+  # --------------------------------------------------------------------------- #
+  # 依赖升级的安全网
+  #
+  # dependabot 每周自动开 PR 升级 pip 依赖（见 .github/dependabot.yml）。
+  # 上面 test job 会对这些 PR 同样生效，所以升级一引入破坏就会在 PR 上红叉，
+  # 不用人肉去猜是哪个版本升坏了。
+  # --------------------------------------------------------------------------- #
