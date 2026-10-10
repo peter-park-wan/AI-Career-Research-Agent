@@ -123,3 +123,67 @@ def test_reflection_critic_failure_is_safe(_):
 def test_configuration_default_reflection_rounds():
     cfg = Configuration()
     assert cfg.max_reflection_rounds == 1
+
+
+def _capture_critic_prompt(model):
+    """包一层 ainvoke，把它收到的 prompt 内容记下来后照常返回。"""
+    captured = {}
+    critic = (
+        model.with_structured_output.return_value
+        .with_retry.return_value
+        .with_config.return_value
+    )
+    original = critic.ainvoke
+
+    async def _capture(messages, *args, **kwargs):
+        captured["prompt"] = messages[0].content
+        return await original(messages, *args, **kwargs)
+
+    critic.ainvoke = _capture
+    return captured
+
+
+# --------------------------------------------------------------------------- #
+# 反思的事实依据不能随 notes 一起消失
+#
+# 报告节点生成完报告后会清空 notes（防多轮对话下 state 膨胀）。反思节点要拿
+# notes 比对报告有没有幻觉，若直接读它就会拿到空串——不报错，但反思等于没做。
+# 因此报告节点先把依据快照到 report_findings。
+# --------------------------------------------------------------------------- #
+@patch("open_deep_research.deep_researcher.get_api_key_for_model", return_value="fake-key")
+def test_reflection_uses_snapshot_when_notes_cleared(_):
+    """notes 已被清空时，Critic 仍必须拿到事实依据。"""
+    model = _mock_models(needs_revision=False)
+    captured = _capture_critic_prompt(model)
+
+    state = {
+        "research_brief": "研究字节跳动 AI 工程师岗位",
+        "final_report": "字节跳动 AI 工程师要求 PyTorch。",
+        "notes": [],  # 模拟报告节点清空后的状态
+        "report_findings": "SNAPSHOT_MARKER_分布式训练要求",
+    }
+    with patch("open_deep_research.deep_researcher.configurable_model", model):
+        asyncio.run(reflect_and_revise_report(state, _cfg(1)))
+
+    assert "SNAPSHOT_MARKER_分布式训练要求" in captured["prompt"]
+
+
+@patch("open_deep_research.deep_researcher.get_api_key_for_model", return_value="fake-key")
+def test_reflection_without_snapshot_has_no_findings(_):
+    """快照缺失且 notes 已清空时确实拿不到依据——这正是快照存在的理由。
+
+    留着这条断言，是为了让"为什么非得加 report_findings"有据可查：
+    一旦有人把快照逻辑删掉，这条会立刻变红。
+    """
+    model = _mock_models(needs_revision=False)
+    captured = _capture_critic_prompt(model)
+
+    state = {
+        "research_brief": "研究字节跳动 AI 工程师岗位",
+        "final_report": "字节跳动 AI 工程师要求 PyTorch。",
+        "notes": [],
+    }
+    with patch("open_deep_research.deep_researcher.configurable_model", model):
+        asyncio.run(reflect_and_revise_report(state, _cfg(1)))
+
+    assert "SNAPSHOT_MARKER_分布式训练要求" not in captured["prompt"]

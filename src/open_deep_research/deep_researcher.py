@@ -723,6 +723,10 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
             return {
                 "final_report": final_report.content, 
                 "messages": [final_report],
+                # 先留快照，再让 cleared_state 清空 notes：反思节点需要拿这份
+                # 依据比对报告的事实一致性。截断口径与反思节点的 findings[:8000]
+                # 保持一致，既够用又不会让 state 重新膨胀。
+                "report_findings": findings[:8000],
                 **cleared_state
             }
             
@@ -798,7 +802,10 @@ async def reflect_and_revise_report(state: AgentState, config: RunnableConfig):
         # Reflection disabled: pass the draft through unchanged.
         return {}
 
-    findings = "\n".join(state.get("notes", []))
+    # 优先用报告节点留存的快照。``notes`` 在报告生成后就已被清空（防 state 膨胀），
+    # 直接读它会拿到空串，Critic 便在无依据的情况下评审——不报错，但反思等于没做。
+    # 保留 notes 兜底，是为了即便某条路径没写快照也不至于退化。
+    findings = state.get("report_findings") or "\n".join(state.get("notes", []))
     research_brief = state.get("research_brief", "")
     current_report = state.get("final_report", "")
     if not current_report:

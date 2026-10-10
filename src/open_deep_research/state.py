@@ -70,6 +70,13 @@ class AgentState(MessagesState):
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
     final_report: str
+    # 报告生成时留存的"事实依据"快照，供反思节点比对报告有没有幻觉。
+    #
+    # 为什么需要单独一个字段：``notes`` 会在报告生成后被清空（防止多轮对话下
+    # state 无限膨胀），而反思节点恰恰需要它来做事实验证。只清空不留存，反思
+    # 就会在依据为空的情况下运行——不报错，但等于没做。
+    # 存的是截断后的快照，因此不会重新引入膨胀问题。
+    report_findings: str = ""
     reflection_summary: Annotated[list[str], override_reducer] = []
 
 class SupervisorState(TypedDict):
