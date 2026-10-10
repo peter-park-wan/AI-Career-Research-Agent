@@ -417,22 +417,35 @@ class Configuration(BaseModel):
     )
 
     # RAG (Retrieval-Augmented Generation) Configuration
+    # 默认开启：简历 / 岗位 JD / 面经这类私有资料是研究的依据，关掉等于让
+    # 研究员只靠公网搜索去猜。装配失败不会中断研究，而是降级为"不可用"
+    # （见 rag.get_rag_store），所以默认开着不存在"服务起不来"的风险。
     rag_enabled: bool = Field(
-        default=False,
+        default=True,
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "boolean",
-                "default": False,
+                "default": True,
                 "description": "启用 RAG 私有知识库检索（需先运行索引脚本 ingest）。"
             }
         }
     )
+    # 部署级固定：整个部署只用这一个 embedding 模型，不对外提供选择。
+    #
+    # 为什么不在运行时让用户选：建库用什么模型，索引就是那个模型的向量空间，
+    # 检索必须同模型才有效。一旦允许每次请求换模型，就得按模型隔离索引
+    # （多份索引、维度冲突、换模型时幂等清单误判"已是最新"），复杂度远超收益。
+    # 所以钉死一个值——要换就改这一处，然后重建索引。
+    #
+    # 为什么选本地 bge 而不是 OpenAI：官方端点在本项目部署环境下不可达
+    # （APITimeoutError），而本地模型离线可用、无调用成本、中文效果更好。
+    # 代价是要装 sentence-transformers（见 pyproject 的 local-embeddings extra）。
     rag_embedding_model: str = Field(
-        default="openai:text-embedding-3-small",
+        default="BAAI/bge-small-zh-v1.5",
         json_schema_extra={
             "x_oap_ui_config": {
                 "type": "string",
-                "default": "openai:text-embedding-3-small",
+                "default": "BAAI/bge-small-zh-v1.5",
                 "description": "Embedding 模型。openai:<model> 使用 OpenAI，其他值视为本地 sentence-transformers 模型名。"
             }
         }

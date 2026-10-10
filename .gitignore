@@ -76,3 +76,9 @@ data/简历.md
 data/*.pdf
 data/*.doc
 data/*.docx
+
+# RAG 本地向量索引（含简历/私有资料的原文片段，勿提交）
+data/rag_index/
+
+# 本地诊断临时产物
+pipver.txt

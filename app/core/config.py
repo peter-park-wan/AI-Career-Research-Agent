@@ -27,12 +27,27 @@
 ``get_settings()`` 在 ``env=prod`` 时执行 ``assert_production_ready()``，
 配置不安全就直接抛 ``ConfigError`` 让进程起不来。宁可起不来，也不要带着
 ``CORS=*`` + 内存 checkpointer 上线。
+
+【API Key 预检】
+
+"缺哪个 API Key"不是本模块能静态断定的：真正决定它的是 ``Configuration``
+的**默认值**（用哪家搜索、哪个模型）。所以本模块**不二次声明**这份名单，
+而是从 ``Configuration`` 的默认值动态推导——硬编码名单必然随默认值漂移，
+``docker-compose.yml`` 的 environment 白名单就是前车之鉴：它抄自上游模板，
+项目把默认模型改成 deepseek 后没跟上，结果白名单里的 OpenAI/Anthropic
+用不上、真正需要的 DeepSeek 反而没进容器。
+
+分级与上面 fail fast 一致：
+    生产缺失  → 启动失败（宁可起不来）
+    开发/预发 → 只告警不拦截（你可能只想跑某一个模块，不该被整体卡住）
 """
 
 from __future__ import annotations
 
+import logging
+import os
 from functools import lru_cache
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, Any, List, Literal, Optional
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -53,6 +68,89 @@ _BLANKABLE = (
     "postgres_dsn",
     "redis_uri",
 )
+
+# ------------------------------------------------------------------ #
+# API Key 预检：从 Configuration 的默认值推导"需要哪些 key"
+# ------------------------------------------------------------------ #
+
+# 模型字符串形如 "deepseek:deepseek-chat"，冒号前即 provider。
+# 值为 None 表示该 provider 不需要环境变量（本地模型等）。
+# 未收录的 provider 一律按"不需要"处理：预检宁可漏报，也不能因为
+# 不认识某个新 provider 而把正常的部署拦在门外。
+_PROVIDER_TO_ENV_KEY = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "google_genai": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistralai": "MISTRAL_API_KEY",
+    "ollama": None,  # 本地推理，无 key
+}
+
+# 搜索后端 → 所需环境变量（取值见 configuration.SearchAPI）
+_SEARCH_API_TO_ENV_KEY = {
+    "tavily": "TAVILY_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "none": None,  # 关闭搜索
+}
+
+# 参与预检的模型字段：一次研究必然走到的环节。
+# 故意不含 embedding_model —— 它只在构建 RAG 索引时使用，把"研究主链路"
+# 和"建库链路"混在一起，会误伤只想跑研究、不建库的场景。
+_PREFLIGHT_MODEL_FIELDS = (
+    "summarization_model",
+    "research_model",
+    "compression_model",
+    "final_report_model",
+)
+
+
+def _configuration_default(field_name: str) -> Any:
+    """读取 ``open_deep_research.Configuration`` 某字段的默认值。
+
+    用**函数内延迟 import** 而不是模块顶部 import，有两个原因：
+
+    1. 避免仅仅为了读一个默认值就把 langchain 整条依赖链拉起来，拖慢启动；
+    2. 万一 open_deep_research 不可用（未安装 / 正在重构），预检应当
+       降级成"不报"，而不是让**配置校验本身**变成新的启动失败原因。
+    """
+    try:
+        from open_deep_research.configuration import Configuration
+    except Exception:  # pragma: no cover - 依赖不可用时的降级路径
+        return None
+    field = Configuration.model_fields.get(field_name)
+    if field is None:  # pragma: no cover - 字段被改名/删除
+        return None
+    default = field.default
+    # SearchAPI 是 Enum 而非 str Enum，默认值是成员对象；其余字段已是 str。
+    return getattr(default, "value", default)
+
+
+def _required_api_keys() -> List[str]:
+    """按 Configuration 的默认值推导"跑一次研究至少需要哪些 key"。
+
+    返回去重且顺序稳定的列表，便于日志阅读与测试断言。
+    """
+    needed: List[str] = []
+
+    search_api = _configuration_default("search_api")
+    if isinstance(search_api, str):
+        key = _SEARCH_API_TO_ENV_KEY.get(search_api.strip().lower())
+        if key:
+            needed.append(key)
+
+    for field_name in _PREFLIGHT_MODEL_FIELDS:
+        model = _configuration_default(field_name)
+        if not isinstance(model, str) or ":" not in model:
+            continue  # 写法异常时不猜，交给实际调用处报错
+        provider = model.split(":", 1)[0].strip().lower()
+        key = _PROVIDER_TO_ENV_KEY.get(provider)
+        if key:
+            needed.append(key)
+
+    return list(dict.fromkeys(needed))
 
 
 class Settings(BaseSettings):
@@ -205,6 +303,25 @@ class Settings(BaseSettings):
     def allows_any_origin(self) -> bool:
         return "*" in self.cors_origins
 
+    def missing_api_keys(self) -> List[str]:
+        """默认研究配置需要、但当前环境里为空的 API key 名称列表。
+
+        只针对**默认值**做判断：运行时请求可以覆盖模型与搜索后端，
+        那时所需的 key 由请求携带，不是启动期能预知的。
+
+        为什么这里用 ``os.getenv`` 而不是直接读 .env 文件：
+        真正取 key 的逻辑（``utils.get_tavily_api_key``）同样走 ``os.getenv``，
+        预检必须与它共用同一数据源才有意义。若改读文件，就会出现
+        ".env 里填了、但进程环境未加载"的情况——预检放行而实际调用仍失败，
+        等于把问题又推回运行时。反过来，若某个启动方式没把 .env 注入环境，
+        这里报缺失是**准确的**：那种方式下研究确实会失败。
+        """
+        # key 由请求体提供（多租户）时，环境变量为空是正常的，不算缺失
+        if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").strip().lower() == "true":
+            return []
+        # 空字符串等同于未配置，与 _BLANKABLE 的口径保持一致
+        return [key for key in _required_api_keys() if not (os.getenv(key) or "").strip()]
+
     # ------------------------------------------------------------------ #
     # 启动校验
     # ------------------------------------------------------------------ #
@@ -237,6 +354,11 @@ class Settings(BaseSettings):
             problems.append("API_RELOAD=true，热重载只应在开发环境开启")
         if self.host == "0.0.0.0" and not self.bearer_token:
             problems.append("监听 0.0.0.0 且无鉴权，等于把接口暴露给整个内网")
+        for key in self.missing_api_keys():
+            problems.append(
+                f"默认研究配置需要 {key}，但环境变量为空："
+                "研究会在首次调用该服务时失败（而非启动时）"
+            )
         return problems
 
     def assert_production_ready(self) -> None:
@@ -260,6 +382,17 @@ def get_settings() -> Settings:
     if settings.is_prod:
         # fail fast：配置不安全就不要把进程拉起来
         settings.assert_production_ready()
+    else:
+        # 非生产环境不拦启动（你可能只想跑某一个模块，不该被整体卡住），
+        # 但缺 key 必须在启动时说出来——否则只能等研究跑到一半抛
+        # MissingAPIKeyError 才发现，而那个阶段的表现往往是"静默写了一份
+        # 没有依据的报告"，比直接报错更难发现。
+        missing = settings.missing_api_keys()
+        if missing:
+            logging.getLogger(__name__).warning(
+                "以下 API Key 未配置，相关功能将在调用时失败：%s",
+                ", ".join(missing),
+            )
     return settings
 
 

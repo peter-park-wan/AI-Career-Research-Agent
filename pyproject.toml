@@ -85,6 +85,12 @@ api = [
 postgres = ["langgraph-checkpoint-postgres>=1.0.0", "psycopg[binary]>=3.1.0"]
 redis = ["langgraph-checkpoint-redis>=1.0.0"]
 ui = ["streamlit>=1.35.0", "requests>=2.32.3"]
+# 默认 embedding 是本地 BAAI/bge-small-zh-v1.5，启用 RAG 必须装这个。
+# 单独成 extra 而非主依赖：它会带上 torch（体积大），不该强加给不用 RAG 的场景。
+local-embeddings = ["sentence-transformers>=2.2.0"]
+# 图片 / 扫描件 PDF 入库需要 OCR。模型随包带来、onnxruntime 推理，
+# 不需要 paddlepaddle，也不需要联网下载。
+ocr = ["rapidocr-onnxruntime>=1.4.0"]
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]

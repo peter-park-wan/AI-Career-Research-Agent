@@ -184,6 +184,11 @@ pip install -e .
 pip install -e ".[api]"      # FastAPI 服务（HTTP 接口）
 pip install -e ".[ui]"       # Streamlit 中文界面
 pip install -e ".[api,ui]"   # 两者都要（想用 Web 界面时推荐）
+pip install -e ".[local-embeddings]"  # RAG 默认依赖：本地 embedding（含 torch）
+pip install -e ".[ocr]"      # RAG 可选：扫描件 PDF / 图片 OCR（RapidOCR）
+
+# 一次装齐
+pip install -e ".[api,ui,local-embeddings,ocr]"
 
 # 或使用 poetry
 poetry install
@@ -253,26 +258,60 @@ langgraph dev --allow-blocking
 将**私有资料**（个人简历、目标公司 JD、面经、学习资源库等）构建为本地向量索引，研究员在调研时可优先检索这些资料，作为联网搜索的补充，从而给出更贴合你个人背景的回答。
 
 ### 1. 准备资料
-把文档（`.md` / `.txt` / `.json` / `.html` / `.pdf`）放入 `data/` 目录。仓库已附带一个示例 `data/简历.example.md`。
+把文档放入 `data/` 目录（递归扫描子目录）。仓库已附带一个示例 `data/简历.example.md`。
+
+| 形式 | 扩展名 | 处理方式 |
+|------|--------|----------|
+| 纯文字 | `.txt` `.md` `.json` `.html` `.htm` | 直接读取（编码自动回退 utf-8 → gb18030 → big5） |
+| 文字版 PDF | `.pdf` | PyMuPDF 提取文本层 |
+| 扫描件 PDF | `.pdf` | 自动检测无文本层 → 渲染为位图 → OCR |
+| 图片 | `.png` `.jpg` `.jpeg` `.webp` `.bmp` `.tiff` `.tif` | OCR（需 `.[ocr]` extra） |
+
+> 不支持 `.gif`（动图）与 Office 格式（`.doc/.docx/.xls/.xlsx/.ppt/.pptx`），运行时会明确提示，请先另存为 `.md` / `.txt` / `.pdf`。
 
 ### 2. 构建索引
 ```bash
-# 默认使用 OpenAI embedding（需 OPENAI_API_KEY）
-python -m open_deep_research.ingest --src ./data --index-path ./data/rag_index
+# 默认使用本地 embedding（BAAI/bge-small-zh-v1.5，512 维，离线可用）
+python -m open_deep_research.ingest
 
-# 也可使用本地离线 embedding（需先: pip install sentence-transformers）
-python -m open_deep_research.ingest --src ./data --embedding BAAI/bge-small-zh-v1.5
+# 显式指定目录（默认值即下面这两个）
+python -m open_deep_research.ingest --src ./data --index-path ./data/rag_index
 ```
+
+命令**必须在项目根目录执行**——`--src` / `--index-path` 都是相对路径。
+
+若 HuggingFace 官方站点无法访问（表现为连接超时），改用镜像：
+
+```bash
+# Windows PowerShell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+```
+
+> 默认的本地 embedding 依赖 `sentence-transformers`（会带上 torch），
+> 需先安装 `pip install -e ".[local-embeddings]"`。
 
 ### 3. 开启 RAG
-在 `.env` 中设置：
+`rag_enabled` 默认为 `true`，无需额外配置；`retrieve_knowledge_base` 会自动注入研究员工具集。
+
+可选调整：
+
 ```bash
-RAG_ENABLED=true
-RAG_EMBEDDING_MODEL=openai:text-embedding-3-small
-RAG_INDEX_PATH=./data/rag_index
-RAG_TOP_K=4
+RAG_TOP_K=4                              # 每次检索返回的最大片段数
+RAG_COLLECTION=career_kb                 # 向量库集合名
 ```
-或在 LangGraph Studio 的配置面板里打开 `rag_enabled`。开启后，`retrieve_knowledge_base` 工具会自动注入到研究员工具集中。
+
+或在 LangGraph Studio / 请求体的 `configurable` 中覆盖：
+```json
+{"configurable": {"rag_enabled": true, "rag_top_k": 6}}
+```
+
+### 增量更新
+按文件内容 sha256 比对清单（`data/rag_index/_ingest_manifest.json`）：新增文件入库、改动文件删旧建新、删除文件清理片段、未变文件跳过。全量重建加 `--rebuild`。
+
+> ⚠️ **更换 embedding 模型后必须重建索引**：不同模型的向量维度与空间不同
+> （bge 为 512 维，OpenAI 为 1536 维），旧索引不能沿用，否则检索结果全是噪声且**不报错**。
+> 模型只需改 `Configuration.rag_embedding_model` 一处（CLI 默认值取自该字段），
+> 然后删除 `data/rag_index` 重建。
 
 ### 4. 重新启动
 ```bash
@@ -462,7 +501,7 @@ streamlit run streamlit_app.py
 
 在「🏠 服务与画像」页签：
 
-1. **新建档案**：展开「➕ 新建档案 / 🗑️ 删除档案」，输入名字（如「张三」「万涵」）后创建。
+1. **新建档案**：展开「➕ 新建档案 / 🗑️ 删除档案」，输入名字（如「简历 A」「简历 B」）后创建。
    也可直接用「📤 上传简历」上传到某个档案——上传时选择的目标档案不存在会自动创建。
 2. **切换使用**：在「选择档案」下拉中选中自己的档案，点「✅ 切换使用」。
    切换会**立即对全部功能生效**（匹配度分析 / 面试准备 / 简历优化 / 求职信 / 端到端工作流都会改为基于该简历）。
