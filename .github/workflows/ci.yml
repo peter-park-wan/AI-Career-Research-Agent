@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 与 langgraph.json 声明的版本保持一致：部署用什么版本，CI 就验什么版本。
           python-version: "3.11"
